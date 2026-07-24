@@ -42,8 +42,9 @@ const C = {
   blue: "#5B8DEF",
 };
 
-const FONT_UI = "'Vazirmatn', sans-serif";
-const FONT_MONO = "'JetBrains Mono', monospace";
+const FONT_UI = "'Rubik', 'Vazirmatn', sans-serif";
+const FONT_TITLE = "'Lalezar', 'Rubik', sans-serif";
+const FONT_MONO = "'Markazi Text', 'Rubik', serif";
 
 const CHECKLIST_ITEMS = [
   { key: "mss", label: "MSS" },
@@ -90,6 +91,7 @@ const emptyTrade = () => ({
   mistake: "",
   lesson: "",
   mainTakeaway: "",
+  tradeImage: "",
 });
 
 /* ---------------------------------------------------------------
@@ -98,7 +100,7 @@ const emptyTrade = () => ({
 function Field({ label, children, span }) {
   return (
     <div style={{ gridColumn: span ? `span ${span}` : undefined }}>
-      <label style={{ display: "block", fontSize: 12, color: C.muted, marginBottom: 6 }}>{label}</label>
+      <label style={{ display: "block", fontSize: 13, color: C.text, opacity: 0.85, marginBottom: 6 }}>{label}</label>
       {children}
     </div>
   );
@@ -112,7 +114,7 @@ const inputStyle = {
   padding: "9px 12px",
   color: C.text,
   fontFamily: FONT_UI,
-  fontSize: 14,
+  fontSize: 15,
   outline: "none",
   boxSizing: "border-box",
 };
@@ -145,7 +147,7 @@ function SegButton({ options, value, onChange }) {
               flex: 1,
               padding: "8px 10px",
               borderRadius: 8,
-              fontSize: 13,
+              fontSize: 14,
               fontFamily: FONT_UI,
               border: `1px solid ${active ? C.gold : C.border}`,
               background: active ? C.goldSoft : C.surface2,
@@ -181,8 +183,8 @@ function Card({ children, style }) {
 function KpiCard({ label, value, sub, accent }) {
   return (
     <Card style={{ borderTop: `2px solid ${accent || C.border}` }}>
-      <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>{label}</div>
-      <div style={{ fontFamily: FONT_MONO, fontSize: 24, color: C.text, fontWeight: 600 }}>{value}</div>
+      <div style={{ fontSize: 12, color: C.text, opacity: 0.82, marginBottom: 8 }}>{label}</div>
+      <div style={{ fontFamily: FONT_MONO, fontSize: "clamp(24px, 4vw, 28px)", color: C.text, fontWeight: 600 }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: C.faint, marginTop: 6 }}>{sub}</div>}
     </Card>
   );
@@ -321,6 +323,21 @@ function TradeForm({ initial, onSave, onCancel }) {
   const set = (k, v) => setT((p) => ({ ...p, [k]: v }));
   const setChecklist = (k) => setT((p) => ({ ...p, checklist: { ...p.checklist, [k]: !p.checklist[k] } }));
 
+  const onImageChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        set("tradeImage", reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const clearImage = () => set("tradeImage", "");
+
   const submit = (e) => {
     e.preventDefault();
     if (!t.symbol.trim()) return;
@@ -399,6 +416,30 @@ function TradeForm({ initial, onSave, onCancel }) {
           </Field>
         </>
       )}
+
+      <div style={{ marginBottom: 22 }}>
+        <div style={{ fontSize: 13, color: C.gold, fontWeight: 600, marginBottom: 12 }}>تصویر معامله</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, alignItems: "start" }}>
+          <Field label="آپلود تصویر چارت یا ستاپ">
+            <input type="file" accept="image/*" onChange={onImageChange} style={{ ...inputStyle, padding: 8, color: C.text }} />
+          </Field>
+          {t.tradeImage ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontSize: 12, color: C.text, opacity: 0.82 }}>پیش‌نمایش تصویر</div>
+              <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", background: C.surface2 }}>
+                <img src={t.tradeImage} alt="پیش‌نمایش معامله" style={{ width: "100%", display: "block", maxHeight: 240, objectFit: "cover" }} />
+              </div>
+              <button type="button" onClick={clearImage} style={{ alignSelf: "flex-start", background: "transparent", color: C.red, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontFamily: FONT_UI }}>
+                حذف تصویر
+              </button>
+            </div>
+          ) : (
+            <div style={{ border: `1px dashed ${C.border}`, borderRadius: 12, padding: 16, color: C.muted, fontSize: 12, lineHeight: 1.8, background: C.surface2 }}>
+              می‌توانی اسکرین‌شات چارت، ستاپ ورود یا نتیجه معامله را اینجا اضافه کنی. تصویر همراه با خود معامله ذخیره می‌شود.
+            </div>
+          )}
+        </div>
+      </div>
 
       <div style={{ marginBottom: 22 }}>
         <div style={{ fontSize: 13, color: C.gold, fontWeight: 600, marginBottom: 12 }}>چرا وارد شدم؟</div>
@@ -607,16 +648,16 @@ function HistoryView({ trades, onEdit, onDelete }) {
                 {t.direction === "buy" ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
               </div>
               <div>
-                <div style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.text }}>{t.symbol || "—"}</div>
-                <div style={{ fontSize: 11, color: C.faint }}>
+                <div style={{ fontFamily: FONT_MONO, fontSize: 15, color: C.text }}>{t.symbol || "—"}</div>
+                <div style={{ fontSize: 12, color: C.faint }}>
                   {t.date} · {t.time} · {t.style === "scalp" ? "Scalp" : "Swing"}
                 </div>
               </div>
             </div>
-            <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.muted, whiteSpace: "nowrap" }}>
+            <div style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.muted, whiteSpace: "nowrap" }}>
               RR {t.riskReward || "—"}
             </div>
-            <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.muted, whiteSpace: "nowrap" }}>
+            <div style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.muted, whiteSpace: "nowrap" }}>
               {t.actualPnL !== "" ? `${t.actualPnL}$` : "—"}
             </div>
             <ResultBadge result={t.result} />
@@ -635,6 +676,16 @@ function HistoryView({ trades, onEdit, onDelete }) {
               </button>
             </div>
           </div>
+          {t.tradeImage && (
+            <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "minmax(0, 240px) 1fr", gap: 12, alignItems: "start" }}>
+              <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", background: C.surface2 }}>
+                <img src={t.tradeImage} alt={`${t.symbol || "trade"} image`} style={{ width: "100%", display: "block", maxHeight: 160, objectFit: "cover" }} />
+              </div>
+              <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.8 }}>
+                تصویر ثبت‌شده برای این معامله ذخیره شده و می‌توانی همان‌جا وضعیت چارت یا ستاپ را دوباره بررسی کنی.
+              </div>
+            </div>
+          )}
         </Card>
       ))}
     </div>
@@ -647,13 +698,12 @@ function HistoryView({ trades, onEdit, onDelete }) {
 function Dashboard({ trades, onNewTrade }) {
   const s = computeStats(trades);
   const insights = useMemo(() => buildInsights(trades), [trades]);
-
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
         <div>
-          <div style={{ fontSize: 20, fontWeight: 700, color: C.text }}>داشبورد</div>
-          <div style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>وضعیت کلی عملکرد معاملاتی تو</div>
+          <div style={{ fontSize: "clamp(22px, 5vw, 26px)", fontFamily: FONT_TITLE, fontWeight: 400, color: C.text }}>داشبورد</div>
+          <div style={{ fontSize: 15, color: C.text, opacity: 0.78, marginTop: 2 }}>وضعیت کلی عملکرد معاملاتی تو</div>
         </div>
         <button
           onClick={onNewTrade}
@@ -676,11 +726,11 @@ function Dashboard({ trades, onNewTrade }) {
       <Card>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
           <Sparkles size={16} color={C.gold} />
-          <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>تحلیل رفتاری</div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: C.text }}>تحلیل رفتاری</div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {insights.map((line, i) => (
-            <div key={i} style={{ fontSize: 13, color: C.muted, lineHeight: 1.9, paddingRight: 14, borderRight: `2px solid ${C.gold}` }}>
+            <div key={i} style={{ fontSize: 14, color: C.muted, lineHeight: 2, paddingRight: 14, borderRight: `2px solid ${C.gold}` }}>
               {line}
             </div>
           ))}
@@ -696,7 +746,7 @@ function Dashboard({ trades, onNewTrade }) {
 function StatBar({ label, rate, total }) {
   return (
     <div style={{ marginBottom: 14 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 5 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 5 }}>
         <span style={{ color: C.text }}>{label}</span>
         <span style={{ color: C.muted, fontFamily: FONT_MONO }}>
           {rate.toFixed(0)}٪ ({total})
@@ -793,13 +843,13 @@ function LoginScreen() {
 
   return (
     <div dir="rtl" style={{ fontFamily: FONT_UI, background: C.bg, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');`}</style>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Lalezar&family=Markazi+Text:wght@400..700&family=Rubik:ital,wght@0,300..900;1,300..900&family=Zain:ital,wght@0,200;0,300;0,400;0,700;0,800;0,900;1,300;1,400&display=swap');`}</style>
       <Card style={{ width: "100%", maxWidth: 380 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 22, justifyContent: "center" }}>
           <div style={{ width: 32, height: 32, borderRadius: 8, background: C.goldSoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <TrendingUp size={17} color={C.gold} />
           </div>
-          <div style={{ fontFamily: FONT_MONO, fontSize: 17, fontWeight: 600 }}>TradeMind</div>
+          <div style={{ fontFamily: FONT_TITLE, fontSize: "clamp(30px, 7vw, 38px)", fontWeight: 400, color: "#FFFFFF", lineHeight: 1 }}>TradeMind</div>
         </div>
         <form onSubmit={submit}>
           <div style={{ marginBottom: 12 }}>
@@ -900,7 +950,7 @@ function Journal({ user }) {
   return (
     <div dir="rtl" style={{ fontFamily: FONT_UI, background: C.bg, minHeight: "100vh", color: C.text, paddingBottom: 76 }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Lalezar&family=Markazi+Text:wght@400..700&family=Rubik:ital,wght@0,300..900;1,300..900&family=Zain:ital,wght@0,200;0,300;0,400;0,700;0,800;0,900;1,300;1,400&display=swap');
         * { box-sizing: border-box; }
         input::placeholder, textarea::placeholder { color: ${C.faint}; }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -913,7 +963,7 @@ function Journal({ user }) {
           <div style={{ width: 30, height: 30, borderRadius: 8, background: C.goldSoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <TrendingUp size={16} color={C.gold} />
           </div>
-          <div style={{ fontFamily: FONT_MONO, fontSize: 15, fontWeight: 600, letterSpacing: 0.5 }}>TradeMind</div>
+          <div style={{ fontFamily: FONT_TITLE, fontSize: "clamp(24px, 5vw, 28px)", fontWeight: 400, letterSpacing: 0.2 }}>TradeMind</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
           <div style={{ fontSize: 11, color: C.faint, display: "flex", alignItems: "center", gap: 6 }}>
@@ -971,18 +1021,18 @@ function Journal({ user }) {
           <Dashboard trades={trades} onNewTrade={startNew} />
         ) : tab === "history" ? (
           <>
-            <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 14 }}>تاریخچه معاملات</div>
+            <div style={{ fontSize: "clamp(24px, 5vw, 28px)", fontFamily: FONT_TITLE, fontWeight: 400, marginBottom: 14 }}>تاریخچه معاملات</div>
             <HistoryView trades={trades} onEdit={startEdit} onDelete={handleDelete} />
           </>
         ) : tab === "stats" ? (
           <>
-            <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 14 }}>آمار و تحلیل</div>
+            <div style={{ fontSize: "clamp(24px, 5vw, 28px)", fontFamily: FONT_TITLE, fontWeight: 400, marginBottom: 14 }}>آمار و تحلیل</div>
             <StatsView trades={trades} />
           </>
         ) : tab === "new" ? (
           <Card>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
-              <div style={{ fontSize: 18, fontWeight: 700 }}>{editing?.symbol ? "ویرایش معامله" : "ثبت معامله جدید"}</div>
+              <div style={{ fontSize: "clamp(24px, 5vw, 28px)", fontFamily: FONT_TITLE, fontWeight: 400 }}>{editing?.symbol ? "ویرایش معامله" : "ثبت معامله جدید"}</div>
               <button onClick={() => setTab("dashboard")} style={{ background: "transparent", border: "none", color: C.muted, cursor: "pointer" }}>
                 <X size={18} />
               </button>
