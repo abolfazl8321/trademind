@@ -48,16 +48,52 @@ const CHECKLIST_ITEMS = [
   { key: "trendline", label: "Trendline" },
 ];
 
-const EMOTIONS = ["آرام", "عجول", "ترس", "انتقام", "FOMO", "اعتماد به نفس زیاد"];
+const EMOTIONS = [
+  "آرام",
+  "عجول",
+  "ترس",
+  "انتقام",
+  "FOMO",
+  "اعتماد به نفس زیاد",
+  "خواب خوب",
+  "استرس مالی",
+  "فقط می‌خواستم ترید کنم",
+  "طبق پلن",
+];
+const EMOTION_CHOICES = EMOTIONS.map((label) => ({ value: label, label }));
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+const normalizeDirection = (value) => {
+  if (value === "short" || value === "sell") return "short";
+  if (value === "buy" || value === "long") return "long";
+  return "long";
+};
+
+const parseEmotionSelections = (value) => {
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (typeof value !== "string") return [];
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
+const serializeEmotionSelections = (values) => values.filter(Boolean).join(", ");
+
+const getEmotionSelections = (trade) => {
+  if (!trade) return [];
+  if (Array.isArray(trade.emotionBefore)) return trade.emotionBefore.filter(Boolean);
+  if (typeof trade.emotionBefore === "string") return parseEmotionSelections(trade.emotionBefore);
+  return [];
+};
 
 const emptyTrade = () => ({
   id: uid(),
   date: new Date().toISOString().slice(0, 10),
   time: new Date().toTimeString().slice(0, 5),
   symbol: "",
-  direction: "buy",
+  direction: "long",
   style: "scalp",
   leverage: "",
   entryPrice: "",
@@ -69,10 +105,7 @@ const emptyTrade = () => ({
   entryReason: "",
   checklist: { mss: false, sweep: false, fvg: false, discount: false, divergence: false, trendline: false },
   entryTrigger: "",
-  emotionBefore: EMOTIONS[0],
-  goodSleep: "yes",
-  financialStress: "no",
-  onlyWantToTrade: "no",
+  emotionBefore: "",
   marketExpectation: "",
   whatHappened: "",
   equityBefore: "",
@@ -80,7 +113,6 @@ const emptyTrade = () => ({
   predictedProfitPercent: "",
   actualPnL: "",
   result: "win",
-  followedPlan: "yes",
   mistake: "",
   lesson: "",
   mainTakeaway: "",
@@ -186,9 +218,16 @@ function Select({ children, ...props }) {
 
 function SegButton({ options, value, onChange }) {
   return (
-    <div style={{ display: "flex", gap: 6 }}>
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
       {options.map((o) => {
         const active = value === o.value;
+        const accent = active
+          ? o.value === "long"
+            ? { bg: C.greenSoft, border: C.green, color: C.green }
+            : o.value === "short"
+              ? { bg: C.redSoft, border: C.red, color: C.red }
+              : { bg: C.goldSoft, border: C.gold, color: C.gold }
+          : undefined;
         return (
           <button
             type="button"
@@ -196,13 +235,14 @@ function SegButton({ options, value, onChange }) {
             onClick={() => onChange(o.value)}
             style={{
               flex: 1,
+              minWidth: 100,
               padding: "8px 10px",
               borderRadius: 8,
               fontSize: 14,
               fontFamily: FONT_UI,
-              border: `1px solid ${active ? C.gold : C.border}`,
-              background: active ? C.goldSoft : C.surface2,
-              color: active ? C.gold : C.muted,
+              border: `1px solid ${active ? accent?.border || C.gold : C.border}`,
+              background: active ? accent?.bg || C.goldSoft : C.surface2,
+              color: active ? accent?.color || C.gold : C.muted,
               cursor: "pointer",
               transition: "all .15s",
             }}
@@ -288,14 +328,10 @@ function computeStats(trades) {
     return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
   }).length;
 
-  const planAdherence = trades.length
-    ? (trades.filter((t) => t.followedPlan === "yes").length / trades.length) * 100
-    : 0;
-
   const sorted = [...trades].sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   const lastEquity = sorted.length ? n(sorted[sorted.length - 1].equityAfter) : 0;
 
-  return { winRate, avgRR, profitFactor, monthCount, planAdherence, lastEquity, wins, losses, decisive };
+  return { winRate, avgRR, profitFactor, monthCount, lastEquity, wins, losses, decisive };
 }
 
 function groupWinRate(trades, keyFn) {
@@ -327,16 +363,6 @@ function buildInsights(trades) {
   const insights = [];
   const decisive = trades.filter((t) => t.result === "win" || t.result === "loss");
 
-  const forced = decisive.filter((t) => t.followedPlan === "no");
-  const planned = decisive.filter((t) => t.followedPlan === "yes");
-  if (forced.length >= 3) {
-    const forcedWR = (forced.filter((t) => t.result === "win").length / forced.length) * 100;
-    const plannedWR = planned.length ? (planned.filter((t) => t.result === "win").length / planned.length) * 100 : 0;
-    insights.push(
-      `معاملات خارج از پلن (فورس) ${forcedWR.toFixed(0)}٪ وین داشتن، در مقابل ${plannedWR.toFixed(0)}٪ برای معاملات طبق پلن.`
-    );
-  }
-
   const bySetup = groupWinRate(trades, (t) =>
     CHECKLIST_ITEMS.filter((c) => t.checklist?.[c.key]).map((c) => c.label).join(" + ")
   ).filter((g) => g.label);
@@ -349,12 +375,6 @@ function buildInsights(trades) {
   if (byTime.length) {
     const worst = [...byTime].sort((a, b) => a.rate - b.rate)[0];
     insights.push(`بیشترین ضرر در بازه «${worst.label}» ثبت شده — وین‌ریت این بازه ${worst.rate.toFixed(0)}٪.`);
-  }
-
-  const lowSleep = decisive.filter((t) => t.goodSleep === "no");
-  if (lowSleep.length >= 3) {
-    const wr = (lowSleep.filter((t) => t.result === "win").length / lowSleep.length) * 100;
-    insights.push(`در روزهایی که خواب خوبی نداشتی، وین‌ریت به ${wr.toFixed(0)}٪ افت کرده.`);
   }
 
   const noTrigger = decisive.filter((t) => !CHECKLIST_ITEMS.some((c) => t.checklist?.[c.key]));
@@ -378,6 +398,14 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
   const lastPickedRef = useRef({ entryImage: null, exitImage: null });
   const set = (k, v) => setT((p) => ({ ...p, [k]: v }));
   const setChecklist = (k) => setT((p) => ({ ...p, checklist: { ...p.checklist, [k]: !p.checklist[k] } }));
+  const toggleEmotion = (value) => {
+    setT((p) => {
+      const current = parseEmotionSelections(p.emotionBefore);
+      const next = current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
+      return { ...p, emotionBefore: serializeEmotionSelections(next) };
+    });
+  };
+  const selectedEmotionValues = parseEmotionSelections(t.emotionBefore);
 
   const MAX_IMAGE_BYTES = 2 * 1024 * 1024; // 2MB
 
@@ -463,27 +491,9 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
 
   const [submitting, setSubmitting] = useState(false);
 
-  const requiredFields = [
-    { key: "symbol", label: "نماد" },
-    { key: "date", label: "تاریخ" },
-    { key: "entryPrice", label: "قیمت ورود" },
-    { key: "volume", label: "حجم" },
-    { key: "tp1", label: "حد سود ۱" },
-    { key: "tp2", label: "حد سود ۲" },
-    { key: "sl", label: "حد ضرر" },
-    { key: "riskReward", label: "نسبت ریسک به ریوارد" },
-    { key: "entryReason", label: "علت ورود" },
-  ];
-
   const submit = (e) => {
     e.preventDefault();
     if (submitting) return;
-
-    const missingFields = requiredFields.filter(({ key }) => !String(t[key] ?? "").trim());
-    if (missingFields.length) {
-      onNotify?.("error", `لطفاً این موارد را پر کن: ${missingFields.map((item) => item.label).join("، ")}.`);
-      return;
-    }
 
     if (uploadingRef.current.entryImage || uploadingRef.current.exitImage) {
       onNotify?.("info", "تصویر در حال آپلود است. چند لحظه صبر کن و بعد دوباره تلاش کن.");
@@ -491,13 +501,13 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
     }
 
     setSubmitting(true);
-    onSave(t);
+    onSave({ ...t, direction: normalizeDirection(t.direction), emotionBefore: serializeEmotionSelections(parseEmotionSelections(t.emotionBefore)) });
   };
 
   const section = (title, children) => (
-    <div style={{ marginBottom: 28 }}>
-      <div style={{ fontSize: 13, color: C.gold, fontWeight: 600, marginBottom: 14 }}>{title}</div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 16 }}>
+    <div style={{ marginBottom: 36 }}>
+      <div style={{ fontSize: 13, color: C.gold, fontWeight: 600, marginBottom: 18 }}>{title}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 20 }}>
         {children}
       </div>
     </div>
@@ -519,11 +529,11 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
           </Field>
           <Field label="جهت">
             <SegButton
-              value={t.direction}
+              value={normalizeDirection(t.direction)}
               onChange={(v) => set("direction", v)}
               options={[
-                { value: "buy", label: "Buy" },
-                { value: "sell", label: "Sell" },
+                { value: "long", label: "Long" },
+                { value: "short", label: "Short" },
               ]}
             />
           </Field>
@@ -545,22 +555,22 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
         "جزئیات ورود",
         <>
           <Field label="قیمت ورود">
-            <TextInput type="number" step="any" value={t.entryPrice} onChange={(e) => set("entryPrice", e.target.value)} />
+            <TextInput type="text" inputMode="decimal" value={t.entryPrice} onChange={(e) => set("entryPrice", e.target.value)} />
           </Field>
           <Field label="حجم">
-            <TextInput type="number" step="any" value={t.volume} onChange={(e) => set("volume", e.target.value)} />
+            <TextInput type="text" inputMode="decimal" value={t.volume} onChange={(e) => set("volume", e.target.value)} />
           </Field>
           <Field label="حد سود ۱ (TP1)">
-            <TextInput type="number" step="any" value={t.tp1} onChange={(e) => set("tp1", e.target.value)} />
+            <TextInput type="text" inputMode="decimal" value={t.tp1} onChange={(e) => set("tp1", e.target.value)} />
           </Field>
           <Field label="حد سود ۲ (TP2)">
-            <TextInput type="number" step="any" value={t.tp2} onChange={(e) => set("tp2", e.target.value)} />
+            <TextInput type="text" inputMode="decimal" value={t.tp2} onChange={(e) => set("tp2", e.target.value)} />
           </Field>
           <Field label="حد ضرر (SL)">
-            <TextInput type="number" step="any" value={t.sl} onChange={(e) => set("sl", e.target.value)} />
+            <TextInput type="text" inputMode="decimal" value={t.sl} onChange={(e) => set("sl", e.target.value)} />
           </Field>
           <Field label="نسبت ریسک به ریوارد (RR)">
-            <TextInput type="number" step="any" placeholder="2.5" value={t.riskReward} onChange={(e) => set("riskReward", e.target.value)} />
+            <TextInput type="text" inputMode="decimal" placeholder="2.5" value={t.riskReward} onChange={(e) => set("riskReward", e.target.value)} />
           </Field>
         </>
       )}
@@ -568,24 +578,51 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
       {section(
         "تریگر و ذهنیت",
         <>
-          <Field label="تریگر ورود">
-            <TextInput placeholder="مثلاً شکست ساختار + FVG" value={t.entryTrigger} onChange={(e) => set("entryTrigger", e.target.value)} />
-          </Field>
           <Field label="احساس قبل از ورود">
-            <Select value={t.emotionBefore} onChange={(e) => set("emotionBefore", e.target.value)}>
-              {EMOTIONS.map((em) => (
-                <option key={em} value={em}>
-                  {em}
-                </option>
-              ))}
-            </Select>
+            <div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {EMOTION_CHOICES.map((option) => {
+                  const checked = selectedEmotionValues.includes(option.label);
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => toggleEmotion(option.label)}
+                      style={{
+                        border: `1px solid ${checked ? C.gold : C.border}`,
+                        background: checked ? C.goldSoft : C.surface2,
+                        color: checked ? C.gold : C.muted,
+                        borderRadius: 999,
+                        padding: "7px 10px",
+                        cursor: "pointer",
+                        fontFamily: FONT_UI,
+                        fontSize: 13,
+                      }}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {selectedEmotionValues.length ? (
+                  selectedEmotionValues.map((item) => (
+                    <span key={item} style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 999, padding: "6px 10px", color: C.text, fontSize: 12 }}>
+                      {item}
+                    </span>
+                  ))
+                ) : (
+                  <span style={{ color: C.faint, fontSize: 12 }}>هنوز هیچ گزینه‌ای انتخاب نشده.</span>
+                )}
+              </div>
+            </div>
           </Field>
         </>
       )}
 
-      <div style={{ marginBottom: 28 }}>
-        <div style={{ fontSize: 13, color: C.gold, fontWeight: 600, marginBottom: 14 }}>تصویر قبل از ورود</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16, alignItems: "start" }}>
+      <div style={{ marginBottom: 36 }}>
+        <div style={{ fontSize: 13, color: C.gold, fontWeight: 600, marginBottom: 18 }}>تصویر قبل از ورود</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 20, alignItems: "start" }}>
           <Field label="آپلود تصویر چارت یا ستاپ">
             <input type="file" accept="image/*" onChange={onEntryImageChange} disabled={uploading.entryImage} style={{ ...inputStyle, padding: 8, color: C.text }} />
             {uploading.entryImage && <div style={{ fontSize: 12, color: C.gold, marginTop: 6 }}>در حال آپلود...</div>}
@@ -609,7 +646,13 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
         </div>
       </div>
 
-      <div style={{ marginBottom: 28 }}>
+      <div style={{ marginBottom: 36 }}>
+        <Field label="تریگر ورود">
+          <TextArea placeholder="مثلاً شکست ساختار + FVG" value={t.entryTrigger} onChange={(e) => set("entryTrigger", e.target.value)} />
+        </Field>
+      </div>
+
+      <div style={{ marginBottom: 36 }}>
         <Field label="علت ورود به معامله">
           <TextArea placeholder="علت ورودت را بنویس..." value={t.entryReason} onChange={(e) => set("entryReason", e.target.value)} />
         </Field>
@@ -645,13 +688,13 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
         "نتیجه معامله",
         <>
           <Field label="دارایی قبل از معامله">
-            <TextInput type="number" step="any" value={t.equityBefore} onChange={(e) => set("equityBefore", e.target.value)} />
+            <TextInput type="text" inputMode="decimal" value={t.equityBefore} onChange={(e) => set("equityBefore", e.target.value)} />
           </Field>
           <Field label="دارایی بعد از معامله">
-            <TextInput type="number" step="any" value={t.equityAfter} onChange={(e) => set("equityAfter", e.target.value)} />
+            <TextInput type="text" inputMode="decimal" value={t.equityAfter} onChange={(e) => set("equityAfter", e.target.value)} />
           </Field>
           <Field label="سود / زیان واقعی">
-            <TextInput type="number" step="any" value={t.actualPnL} onChange={(e) => set("actualPnL", e.target.value)} />
+            <TextInput type="text" inputMode="decimal" value={t.actualPnL} onChange={(e) => set("actualPnL", e.target.value)} />
           </Field>
           <Field label="نتیجه">
             <SegButton
@@ -667,9 +710,9 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
         </>
       )}
 
-      <div style={{ marginBottom: 28 }}>
-        <div style={{ fontSize: 13, color: C.gold, fontWeight: 600, marginBottom: 14 }}>مرور و درس‌ها</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
+      <div style={{ marginBottom: 36 }}>
+        <div style={{ fontSize: 13, color: C.gold, fontWeight: 600, marginBottom: 18 }}>مرور و درس‌ها</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 20 }}>
           <Field label="اشتباه من">
             <TextArea value={t.mistake} onChange={(e) => set("mistake", e.target.value)} />
           </Field>
@@ -728,12 +771,8 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
 --------------------------------------------------------------- */
 function HistoryView({ trades, onEdit, onDelete }) {
   const [zoomImage, setZoomImage] = useState("");
+  const [selectedTradeId, setSelectedTradeId] = useState(null);
   const sorted = [...trades].sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
-  const yn = (v) => (v === "yes" ? "بله" : v === "no" ? "خیر" : "—");
-  const checklistLabel = (t) => {
-    const tags = CHECKLIST_ITEMS.filter((c) => t.checklist?.[c.key]).map((c) => c.label);
-    return tags.length ? tags.join(" + ") : "—";
-  };
 
   const DetailRow = ({ label, value }) => (
     <div style={{ display: "grid", gridTemplateColumns: "130px 1fr", gap: 8, padding: "7px 0", borderBottom: `1px dashed ${C.borderSoft}` }}>
@@ -750,10 +789,37 @@ function HistoryView({ trades, onEdit, onDelete }) {
     );
   }
 
+  const selectedTrade = sorted.find((t) => t.id === selectedTradeId) || sorted[0];
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {sorted.map((t) => (
-        <Card key={t.id} style={{ padding: 14 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        {sorted.map((t) => {
+          const active = selectedTrade?.id === t.id;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setSelectedTradeId(t.id)}
+              style={{
+                border: `1px solid ${active ? C.gold : C.border}`,
+                background: active ? C.goldSoft : C.surface2,
+                color: active ? C.gold : C.muted,
+                borderRadius: 999,
+                padding: "7px 10px",
+                cursor: "pointer",
+                fontFamily: FONT_UI,
+                fontSize: 12,
+              }}
+            >
+              {t.symbol || "معامله"} · {t.date}
+            </button>
+          );
+        })}
+      </div>
+
+      {selectedTrade && (
+        <Card key={selectedTrade.id} style={{ padding: 14 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 200 }}>
               <div
@@ -764,36 +830,36 @@ function HistoryView({ trades, onEdit, onDelete }) {
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  background: t.direction === "buy" ? C.greenSoft : C.redSoft,
-                  color: t.direction === "buy" ? C.green : C.red,
+                  background: selectedTrade.direction === "long" ? C.greenSoft : C.redSoft,
+                  color: selectedTrade.direction === "long" ? C.green : C.red,
                   flexShrink: 0,
                 }}
               >
-                {t.direction === "buy" ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
+                {selectedTrade.direction === "long" ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
               </div>
               <div>
-                <div style={{ fontFamily: FONT_MONO, fontSize: 18, color: C.text }}>{t.symbol || "—"}</div>
+                <div style={{ fontFamily: FONT_MONO, fontSize: 18, color: C.text }}>{selectedTrade.symbol || "—"}</div>
                 <div style={{ fontSize: 14, color: C.faint }}>
-                  {t.date} · {t.time} · {t.style === "scalp" ? "Scalp" : "Swing"}
+                  {selectedTrade.date} · {selectedTrade.time} · {selectedTrade.style === "scalp" ? "Scalp" : "Swing"}
                 </div>
               </div>
             </div>
 
-            <div style={{ fontFamily: FONT_MONO, fontSize: 16, color: C.muted, whiteSpace: "nowrap" }}>RR {t.riskReward || "—"}</div>
+            <div style={{ fontFamily: FONT_MONO, fontSize: 16, color: C.muted, whiteSpace: "nowrap" }}>RR {selectedTrade.riskReward || "—"}</div>
             <div style={{ fontFamily: FONT_MONO, fontSize: 16, color: C.muted, whiteSpace: "nowrap" }}>
-              {t.actualPnL !== "" ? `${t.actualPnL}$` : "—"}
+              {selectedTrade.actualPnL !== "" ? `${selectedTrade.actualPnL}$` : "—"}
             </div>
-            <ResultBadge result={t.result} fontSize={13} />
+            <ResultBadge result={selectedTrade.result} fontSize={13} />
 
             <div style={{ display: "flex", gap: 6 }}>
               <button
-                onClick={() => onEdit(t)}
+                onClick={() => onEdit(selectedTrade)}
                 style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 7, padding: "6px 10px", cursor: "pointer", fontFamily: FONT_UI, fontSize: 12 }}
               >
                 ویرایش
               </button>
               <button
-                onClick={() => onDelete(t.id)}
+                onClick={() => onDelete(selectedTrade.id)}
                 style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.red, borderRadius: 7, padding: "6px 8px", cursor: "pointer" }}
               >
                 <Trash2 size={14} />
@@ -804,8 +870,8 @@ function HistoryView({ trades, onEdit, onDelete }) {
           <div className="history-details-layout" style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr", gap: 12, alignItems: "start" }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
               {[
-                { src: t.entryImage, label: "قبل از ورود" },
-                { src: t.exitImage, label: "بعد از معامله" },
+                { src: selectedTrade.entryImage, label: "قبل از ورود" },
+                { src: selectedTrade.exitImage, label: "بعد از معامله" },
               ].map((img, i) =>
                 img.src ? (
                   <button
@@ -815,7 +881,7 @@ function HistoryView({ trades, onEdit, onDelete }) {
                     title="نمایش تصویر در اندازه بزرگ"
                     style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", background: C.surface2, padding: 0, width: "100%", height: 150, cursor: "zoom-in", position: "relative" }}
                   >
-                    <LazyImage src={img.src} alt={`${t.symbol || "trade"} - ${img.label}`} style={{ width: "100%", height: "100%", display: "block", objectFit: "cover" }} />
+                    <LazyImage src={img.src} alt={`${selectedTrade.symbol || "trade"} - ${img.label}`} style={{ width: "100%", height: "100%", display: "block", objectFit: "cover" }} />
                     <span style={{ position: "absolute", bottom: 6, right: 6, background: "rgba(11,14,20,0.75)", color: C.text, fontSize: 10, padding: "2px 8px", borderRadius: 999, zIndex: 1 }}>{img.label}</span>
                   </button>
                 ) : (
@@ -828,38 +894,32 @@ function HistoryView({ trades, onEdit, onDelete }) {
 
             <div style={{ border: `1px solid ${C.borderSoft}`, borderRadius: 12, padding: "8px 12px", background: C.surface2 }}>
               <div style={{ fontSize: 12, color: C.gold, marginBottom: 6, fontWeight: 600 }}>جزئیات کامل معامله</div>
-              <DetailRow label="نماد" value={t.symbol || "—"} />
-              <DetailRow label="تاریخ" value={t.date || "—"} />
-              <DetailRow label="ساعت" value={t.time || "—"} />
-              <DetailRow label="جهت" value={t.direction === "buy" ? "Buy" : "Sell"} />
-              <DetailRow label="سبک" value={t.style === "scalp" ? "Scalp" : "Swing"} />
-              <DetailRow label="اهرم" value={t.leverage || "—"} />
-              <DetailRow label="قیمت ورود" value={t.entryPrice} />
-              <DetailRow label="حجم" value={t.volume} />
-              <DetailRow label="حد سود ۱" value={t.tp1} />
-              <DetailRow label="حد سود ۲" value={t.tp2} />
-              <DetailRow label="حد ضرر" value={t.sl} />
-              <DetailRow label="RR" value={t.riskReward} />
-              <DetailRow label="تریگرها" value={checklistLabel(t)} />
-              <DetailRow label="تریگر ورود" value={t.entryTrigger} />
-              <DetailRow label="احساس قبل ورود" value={t.emotionBefore} />
-              <DetailRow label="خواب خوب" value={yn(t.goodSleep)} />
-              <DetailRow label="استرس مالی" value={yn(t.financialStress)} />
-              <DetailRow label="فقط می‌خواستم ترید کنم" value={yn(t.onlyWantToTrade)} />
-              <DetailRow label="طبق پلن" value={t.followedPlan === "yes" ? "بله" : "فورس بود"} />
-              <DetailRow label="علت ورود" value={t.entryReason} />
-              <DetailRow label="دارایی قبل" value={t.equityBefore} />
-              <DetailRow label="دارایی بعد" value={t.equityAfter} />
-              <DetailRow label="سود/زیان واقعی" value={t.actualPnL} />
-              <DetailRow label="نتیجه" value={t.result === "win" ? "سود" : t.result === "loss" ? "ضرر" : "سربه‌سر"} />
-              <DetailRow label="اشتباه" value={t.mistake} />
-              <DetailRow label="درس" value={t.lesson} />
-              <DetailRow label="جمع‌بندی نهایی" value={t.mainTakeaway} />
+              <DetailRow label="نماد" value={selectedTrade.symbol || "—"} />
+              <DetailRow label="تاریخ" value={selectedTrade.date || "—"} />
+              <DetailRow label="ساعت" value={selectedTrade.time || "—"} />
+              <DetailRow label="جهت" value={normalizeDirection(selectedTrade.direction) === "long" ? "Long" : "Short"} />
+              <DetailRow label="سبک" value={selectedTrade.style === "scalp" ? "Scalp" : "Swing"} />
+              <DetailRow label="اهرم" value={selectedTrade.leverage || "—"} />
+              <DetailRow label="قیمت ورود" value={selectedTrade.entryPrice} />
+              <DetailRow label="حجم" value={selectedTrade.volume} />
+              <DetailRow label="حد سود ۱" value={selectedTrade.tp1} />
+              <DetailRow label="حد سود ۲" value={selectedTrade.tp2} />
+              <DetailRow label="حد ضرر" value={selectedTrade.sl} />
+              <DetailRow label="RR" value={selectedTrade.riskReward} />
+              <DetailRow label="احساس قبل ورود" value={selectedTrade.emotionBefore} />
+              <DetailRow label="علت ورود" value={selectedTrade.entryReason} />
+              <DetailRow label="دارایی قبل" value={selectedTrade.equityBefore} />
+              <DetailRow label="دارایی بعد" value={selectedTrade.equityAfter} />
+              <DetailRow label="سود/زیان واقعی" value={selectedTrade.actualPnL} />
+              <DetailRow label="نتیجه" value={selectedTrade.result === "win" ? "سود" : selectedTrade.result === "loss" ? "ضرر" : "سربه‌سر"} />
+              <DetailRow label="اشتباه" value={selectedTrade.mistake} />
+              <DetailRow label="درس" value={selectedTrade.lesson} />
+              <DetailRow label="جمع‌بندی نهایی" value={selectedTrade.mainTakeaway} />
               <div style={{ fontSize: 11, color: C.faint, marginTop: 8 }}>برای ویرایش هر کدام از موارد بالا از دکمه «ویرایش» استفاده کن.</div>
             </div>
           </div>
         </Card>
-      ))}
+      )}
 
       {zoomImage && (
         <div
@@ -945,7 +1005,6 @@ function Dashboard({ trades, onNewTrade }) {
         <KpiCard label="میانگین RR" value={s.avgRR.toFixed(2)} accent={C.blue} />
         <KpiCard label="Profit Factor" value={s.profitFactor === Infinity ? "∞" : s.profitFactor.toFixed(2)} accent={C.gold} />
         <KpiCard label="معاملات این ماه" value={s.monthCount} />
-        <KpiCard label="پیروی از پلن" value={`${s.planAdherence.toFixed(0)}٪`} accent={s.planAdherence >= 70 ? C.green : C.red} />
       </div>
 
       <Card>
@@ -990,8 +1049,7 @@ function StatsView({ trades }) {
     return tags.length ? tags.join(" + ") : "بدون تریگر";
   });
   const byTime = groupWinRate(trades, (t) => periodOfDay(t.time));
-  const byDirection = groupWinRate(trades, (t) => (t.direction === "buy" ? "Buy" : "Sell"));
-  const byPlan = groupWinRate(trades, (t) => (t.followedPlan === "yes" ? "طبق پلن" : "فورس ترید"));
+  const byDirection = groupWinRate(trades, (t) => (normalizeDirection(t.direction) === "long" ? "Long" : "Short"));
 
   if (!trades.length) {
     return (
@@ -1018,12 +1076,6 @@ function StatsView({ trades }) {
       <Card>
         <div style={{ fontSize: 13, fontWeight: 600, color: C.gold, marginBottom: 14 }}>عملکرد بر اساس جهت</div>
         {byDirection.map((g) => (
-          <StatBar key={g.label} {...g} />
-        ))}
-      </Card>
-      <Card>
-        <div style={{ fontSize: 13, fontWeight: 600, color: C.gold, marginBottom: 14 }}>طبق پلن در برابر فورس ترید</div>
-        {byPlan.map((g) => (
           <StatBar key={g.label} {...g} />
         ))}
       </Card>
@@ -1183,75 +1235,73 @@ function Journal({ user }) {
     return trimmed;
   };
 
+  const normalizeTextValue = (value) => {
+    if (value === null || value === undefined) return null;
+    if (typeof value === "string") return value.trim() ? value : null;
+    return String(value);
+  };
+
   const mapRowToTrade = (row) => ({
     id: row.id ? `db-${row.id}` : uid(),
     dbId: row.id ?? null,
-    date: row.date || "",
-    time: row.time || "",
-    symbol: row.symbol || "",
-    direction: row.direction || "buy",
-    style: row.style || "scalp",
-    leverage: row.leverage ?? "",
-    entryPrice: row.entry_price ?? "",
-    volume: row.volume ?? "",
-    tp1: row.tp1 ?? "",
-    tp2: row.tp2 ?? "",
-    sl: row.sl ?? "",
-    riskReward: row.risk_reward ?? "",
-    entryReason: row.entry_reason ?? "",
+    date: normalizeTextValue(row.date) ?? "",
+    time: normalizeTextValue(row.time) ?? "",
+    symbol: normalizeTextValue(row.symbol) ?? "",
+    direction: normalizeDirection(row.direction || "long"),
+    style: normalizeTextValue(row.style) ?? "scalp",
+    leverage: normalizeTextValue(row.leverage) ?? "",
+    entryPrice: normalizeTextValue(row.entry_price) ?? "",
+    volume: normalizeTextValue(row.volume) ?? "",
+    tp1: normalizeTextValue(row.tp1) ?? "",
+    tp2: normalizeTextValue(row.tp2) ?? "",
+    sl: normalizeTextValue(row.sl) ?? "",
+    riskReward: normalizeTextValue(row.risk_reward) ?? "",
+    entryReason: normalizeTextValue(row.entry_reason) ?? "",
     checklist: normalizeChecklist(row.checklist),
-    entryTrigger: row.entry_trigger ?? "",
-    emotionBefore: row.emotion_before ?? EMOTIONS[0],
-    goodSleep: row.good_sleep ?? "yes",
-    financialStress: row.financial_stress ?? "no",
-    onlyWantToTrade: row.only_want_to_trade ?? "no",
-    marketExpectation: row.market_expectation ?? "",
-    whatHappened: row.what_happened ?? "",
-    equityBefore: row.equity_before ?? "",
-    equityAfter: row.equity_after ?? "",
-    predictedProfitPercent: row.predicted_profit_percent ?? "",
-    actualPnL: row.actual_pnl ?? "",
-    result: row.result || "be",
-    followedPlan: row.followed_plan ?? "yes",
-    mistake: row.mistake ?? "",
-    lesson: row.lesson ?? "",
-    mainTakeaway: row.main_takeaway ?? "",
+    entryTrigger: normalizeTextValue(row.entry_trigger) ?? "",
+    emotionBefore: normalizeTextValue(row.emotion_before) ?? "",
+    marketExpectation: normalizeTextValue(row.market_expectation) ?? "",
+    whatHappened: normalizeTextValue(row.what_happened) ?? "",
+    equityBefore: normalizeTextValue(row.equity_before) ?? "",
+    equityAfter: normalizeTextValue(row.equity_after) ?? "",
+    predictedProfitPercent: normalizeTextValue(row.predicted_profit_percent) ?? "",
+    actualPnL: normalizeTextValue(row.actual_pnl) ?? "",
+    result: normalizeTextValue(row.result) ?? "be",
+    mistake: normalizeTextValue(row.mistake) ?? "",
+    lesson: normalizeTextValue(row.lesson) ?? "",
+    mainTakeaway: normalizeTextValue(row.main_takeaway) ?? "",
     entryImage: normalizeImageUrl(row.entry_image),
     exitImage: normalizeImageUrl(row.exit_image),
   });
 
   const mapTradeToRow = (trade) => ({
     user_id: user.id,
-    date: trade.date,
-    time: trade.time,
-    symbol: trade.symbol,
-    direction: trade.direction,
-    style: trade.style,
-    leverage: trade.leverage || null,
-    entry_price: trade.entryPrice || null,
-    volume: trade.volume || null,
-    tp1: trade.tp1 || null,
-    tp2: trade.tp2 || null,
-    sl: trade.sl || null,
-    risk_reward: trade.riskReward || null,
-    entry_reason: trade.entryReason || null,
+    date: normalizeTextValue(trade.date),
+    time: normalizeTextValue(trade.time),
+    symbol: normalizeTextValue(trade.symbol),
+    direction: normalizeDirection(trade.direction),
+    style: normalizeTextValue(trade.style) ?? "scalp",
+    leverage: normalizeTextValue(trade.leverage),
+    entry_price: normalizeTextValue(trade.entryPrice),
+    volume: normalizeTextValue(trade.volume),
+    tp1: normalizeTextValue(trade.tp1),
+    tp2: normalizeTextValue(trade.tp2),
+    sl: normalizeTextValue(trade.sl),
+    risk_reward: normalizeTextValue(trade.riskReward),
+    entry_reason: normalizeTextValue(trade.entryReason),
     checklist: normalizeChecklist(trade.checklist),
-    entry_trigger: trade.entryTrigger || null,
-    emotion_before: trade.emotionBefore || null,
-    good_sleep: trade.goodSleep || null,
-    financial_stress: trade.financialStress || null,
-    only_want_to_trade: trade.onlyWantToTrade || null,
-    market_expectation: trade.marketExpectation || null,
-    what_happened: trade.whatHappened || null,
-    equity_before: trade.equityBefore || null,
-    equity_after: trade.equityAfter || null,
-    predicted_profit_percent: trade.predictedProfitPercent || null,
-    actual_pnl: trade.actualPnL || null,
-    result: trade.result || "be",
-    followed_plan: trade.followedPlan || null,
-    mistake: trade.mistake || null,
-    lesson: trade.lesson || null,
-    main_takeaway: trade.mainTakeaway || null,
+    entry_trigger: normalizeTextValue(trade.entryTrigger),
+    emotion_before: normalizeTextValue(trade.emotionBefore),
+    market_expectation: normalizeTextValue(trade.marketExpectation),
+    what_happened: normalizeTextValue(trade.whatHappened),
+    equity_before: normalizeTextValue(trade.equityBefore),
+    equity_after: normalizeTextValue(trade.equityAfter),
+    predicted_profit_percent: normalizeTextValue(trade.predictedProfitPercent),
+    actual_pnl: normalizeTextValue(trade.actualPnL),
+    result: normalizeTextValue(trade.result) ?? "be",
+    mistake: normalizeTextValue(trade.mistake),
+    lesson: normalizeTextValue(trade.lesson),
+    main_takeaway: normalizeTextValue(trade.mainTakeaway),
     entry_image: normalizeImageUrl(trade.entryImage) || null,
     exit_image: normalizeImageUrl(trade.exitImage) || null,
     created_at: new Date().toISOString(),
@@ -1392,7 +1442,7 @@ function Journal({ user }) {
         @keyframes skeleton-pulse { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
         .history-details-layout { grid-template-columns: 1fr; }
         @media (min-width: 900px) {
-          .history-details-layout { grid-template-columns: minmax(0, 260px) 1fr; }
+          .history-details-layout { grid-template-columns: minmax(0, 280px) 1fr; }
         }
         @media (min-width: 768px) { .mobile-nav { display: none; } }
         @media (max-width: 767px) { .desktop-nav { display: none; } }
@@ -1465,7 +1515,7 @@ function Journal({ user }) {
         </div>
       ) : null}
 
-      <div style={{ display: "flex", gap: 6, padding: "14px 20px 0" }} className="desktop-nav">
+      <div style={{ display: "flex", gap: 8, padding: "16px 20px 0" }} className="desktop-nav">
         {TABS.map((tItem) => {
           const Icon = tItem.icon;
           const active = tab === tItem.key || (tab === "new" && tItem.key === "new");
@@ -1494,7 +1544,7 @@ function Journal({ user }) {
         })}
       </div>
 
-      <div style={{ maxWidth: 1000, margin: "0 auto", padding: "18px 20px 40px" }}>
+      <div style={{ maxWidth: 1080, margin: "0 auto", padding: "24px 24px 48px" }}>
         {loading ? (
           <div style={{ textAlign: "center", padding: 60, color: C.muted }}>در حال بارگذاری...</div>
         ) : tab === "dashboard" ? (
