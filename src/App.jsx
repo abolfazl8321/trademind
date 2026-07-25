@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   LayoutDashboard,
   PlusCircle,
@@ -12,14 +12,7 @@ import {
   Loader2,
   LogOut,
 } from "lucide-react";
-import { auth, db } from "./firebase.js";
-import {
-  onAuthStateChanged,
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut,
-} from "firebase/auth";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { supabase, supabaseConfigStatus } from "./supabase.js";
 
 /* ---------------------------------------------------------------
    Design tokens — dark trading-terminal palette
@@ -91,12 +84,70 @@ const emptyTrade = () => ({
   mistake: "",
   lesson: "",
   mainTakeaway: "",
-  tradeImage: "",
+  entryImage: "",
+  exitImage: "",
 });
 
 /* ---------------------------------------------------------------
    Small UI atoms
 --------------------------------------------------------------- */
+function LazyImage({ src, alt, style, onClick }) {
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setLoaded(false);
+    setFailed(false);
+  }, [src]);
+
+  if (failed) {
+    return (
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          minHeight: 90,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: C.surface2,
+          color: C.faint,
+          fontSize: 11,
+          textAlign: "center",
+          padding: 8,
+        }}
+      >
+        تصویر بارگذاری نشد
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ position: "relative", width: "100%", height: "100%", background: C.surface2, overflow: "hidden" }}>
+      {!loaded && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: `linear-gradient(90deg, ${C.surface2} 25%, ${C.border} 37%, ${C.surface2} 63%)`,
+            backgroundSize: "400% 100%",
+            animation: "skeleton-pulse 1.4s ease infinite",
+          }}
+        />
+      )}
+      <img
+        src={src}
+        alt={alt}
+        loading="lazy"
+        decoding="async"
+        onLoad={() => setLoaded(true)}
+        onError={() => setFailed(true)}
+        onClick={onClick}
+        style={{ opacity: loaded ? 1 : 0, transition: "opacity .25s ease", ...style }}
+      />
+    </div>
+  );
+}
+
 function Field({ label, children, span }) {
   return (
     <div style={{ gridColumn: span ? `span ${span}` : undefined }}>
@@ -190,7 +241,7 @@ function KpiCard({ label, value, sub, accent }) {
   );
 }
 
-function ResultBadge({ result }) {
+function ResultBadge({ result, fontSize = 11 }) {
   const map = {
     win: { c: C.green, bg: C.greenSoft, t: "سود" },
     loss: { c: C.red, bg: C.redSoft, t: "ضرر" },
@@ -202,7 +253,7 @@ function ResultBadge({ result }) {
       style={{
         background: s.bg,
         color: s.c,
-        fontSize: 11,
+        fontSize,
         padding: "3px 9px",
         borderRadius: 999,
         fontFamily: FONT_UI,
@@ -318,51 +369,147 @@ function buildInsights(trades) {
 /* ---------------------------------------------------------------
    Trade Form
 --------------------------------------------------------------- */
-function TradeForm({ initial, onSave, onCancel }) {
+function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
   const [t, setT] = useState(initial || emptyTrade());
+  const [uploading, setUploading] = useState({ entryImage: false, exitImage: false });
+  const [uploadError, setUploadError] = useState({ entryImage: "", exitImage: "" });
+  const [previewUrl, setPreviewUrl] = useState({ entryImage: "", exitImage: "" });
+  const uploadingRef = useRef({ entryImage: false, exitImage: false });
+  const lastPickedRef = useRef({ entryImage: null, exitImage: null });
   const set = (k, v) => setT((p) => ({ ...p, [k]: v }));
   const setChecklist = (k) => setT((p) => ({ ...p, checklist: { ...p.checklist, [k]: !p.checklist[k] } }));
 
-  const onImageChange = (e) => {
+  const MAX_IMAGE_BYTES = 2 * 1024 * 1024; // 2MB
+
+  // Revoke any local preview blobs when the form unmounts, to avoid memory leaks.
+  useEffect(() => {
+    return () => {
+      Object.values(previewUrl).forEach((url) => url && URL.revokeObjectURL(url));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Uploads the screenshot to the "trade-images" Storage bucket and stores
+  // the resulting public URL on the trade (not the raw file — a raw base64
+  // image is too large to keep directly in a database column).
+  const makeImageHandler = (field) => async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = ""; // allow re-selecting the same file later
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === "string") {
-        set("tradeImage", reader.result);
-      }
-    };
-    reader.readAsDataURL(file);
+    // Some mobile browsers (notably iOS Safari) fire "change" twice for a
+    // single file pick. An in-flight guard alone isn't enough because the
+    // second event can arrive *after* the first upload already finished.
+    // So we also remember which exact file (name+size+timestamp) we just
+    // uploaded for this field and ignore an identical repeat for a bit.
+    const signature = `${file.name}-${file.size}-${file.lastModified}`;
+    const last = lastPickedRef.current[field];
+    if (last && last.signature === signature && Date.now() - last.time < 4000) {
+      return;
+    }
+    if (uploadingRef.current[field]) return;
+
+    if (file.size > MAX_IMAGE_BYTES) {
+      setUploadError((p) => ({ ...p, [field]: "حجم تصویر بیشتر از ۲ مگابایته — یه تصویر کوچیک‌تر انتخاب کن." }));
+      return;
+    }
+
+    if (!supabase) {
+      setUploadError((p) => ({ ...p, [field]: "اتصال Supabase برقرار نیست." }));
+      return;
+    }
+
+    lastPickedRef.current[field] = { signature, time: Date.now() };
+    uploadingRef.current[field] = true;
+    setUploading((p) => ({ ...p, [field]: true }));
+    setUploadError((p) => ({ ...p, [field]: "" }));
+
+    // Show the picked image immediately, before the upload even finishes.
+    const localUrl = URL.createObjectURL(file);
+    setPreviewUrl((p) => {
+      if (p[field]) URL.revokeObjectURL(p[field]);
+      return { ...p, [field]: localUrl };
+    });
+
+    try {
+      const ext = file.name.split(".").pop() || "png";
+      const path = `${userId}/${field}-${uid()}.${ext}`;
+      const { error: uploadErr } = await supabase.storage.from("trade-images").upload(path, file, {
+        cacheControl: "3600",
+        upsert: false,
+      });
+      if (uploadErr) throw uploadErr;
+
+      const { data } = supabase.storage.from("trade-images").getPublicUrl(path);
+      set(field, data.publicUrl);
+    } catch (err) {
+      console.error("Image upload failed:", err);
+      setUploadError((p) => ({ ...p, [field]: "آپلود تصویر ناموفق بود — دوباره تلاش کن." }));
+    } finally {
+      uploadingRef.current[field] = false;
+      setUploading((p) => ({ ...p, [field]: false }));
+    }
   };
 
-  const clearImage = () => set("tradeImage", "");
+  const onEntryImageChange = makeImageHandler("entryImage");
+  const onExitImageChange = makeImageHandler("exitImage");
+  const clearImage = (field) => {
+    setPreviewUrl((p) => {
+      if (p[field]) URL.revokeObjectURL(p[field]);
+      return { ...p, [field]: "" };
+    });
+    set(field, "");
+  };
+
+  const [submitting, setSubmitting] = useState(false);
+
+  const requiredFields = [
+    { key: "symbol", label: "نماد" },
+    { key: "date", label: "تاریخ" },
+    { key: "entryPrice", label: "قیمت ورود" },
+    { key: "volume", label: "حجم" },
+    { key: "tp1", label: "حد سود ۱" },
+    { key: "tp2", label: "حد سود ۲" },
+    { key: "sl", label: "حد ضرر" },
+    { key: "riskReward", label: "نسبت ریسک به ریوارد" },
+    { key: "entryReason", label: "علت ورود" },
+  ];
 
   const submit = (e) => {
     e.preventDefault();
-    if (!t.symbol.trim()) return;
+    if (submitting) return;
+
+    const missingFields = requiredFields.filter(({ key }) => !String(t[key] ?? "").trim());
+    if (missingFields.length) {
+      onNotify?.("error", `لطفاً این موارد را پر کن: ${missingFields.map((item) => item.label).join("، ")}.`);
+      return;
+    }
+
+    if (uploadingRef.current.entryImage || uploadingRef.current.exitImage) {
+      onNotify?.("info", "تصویر در حال آپلود است. چند لحظه صبر کن و بعد دوباره تلاش کن.");
+      return;
+    }
+
+    setSubmitting(true);
     onSave(t);
   };
 
   const section = (title, children) => (
-    <div style={{ marginBottom: 22 }}>
-      <div style={{ fontSize: 13, color: C.gold, fontWeight: 600, marginBottom: 12 }}>{title}</div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }}>
+    <div style={{ marginBottom: 28 }}>
+      <div style={{ fontSize: 13, color: C.gold, fontWeight: 600, marginBottom: 14 }}>{title}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 16 }}>
         {children}
       </div>
     </div>
   );
 
   return (
-    <form onSubmit={submit}>
+    <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       {section(
         "اطلاعات پایه",
         <>
           <Field label="تاریخ">
             <TextInput type="date" value={t.date} onChange={(e) => set("date", e.target.value)} />
-          </Field>
-          <Field label="ساعت">
-            <TextInput type="time" value={t.time} onChange={(e) => set("time", e.target.value)} />
           </Field>
           <Field label="نماد">
             <TextInput placeholder="BTCUSDT" value={t.symbol} onChange={(e) => set("symbol", e.target.value)} />
@@ -387,6 +534,7 @@ function TradeForm({ initial, onSave, onCancel }) {
               options={[
                 { value: "scalp", label: "Scalp" },
                 { value: "swing", label: "Swing" },
+                { value: "daytrade", label: "Daytrade" },
               ]}
             />
           </Field>
@@ -417,57 +565,9 @@ function TradeForm({ initial, onSave, onCancel }) {
         </>
       )}
 
-      <div style={{ marginBottom: 22 }}>
-        <div style={{ fontSize: 13, color: C.gold, fontWeight: 600, marginBottom: 12 }}>تصویر معامله</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, alignItems: "start" }}>
-          <Field label="آپلود تصویر چارت یا ستاپ">
-            <input type="file" accept="image/*" onChange={onImageChange} style={{ ...inputStyle, padding: 8, color: C.text }} />
-          </Field>
-          {t.tradeImage ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <div style={{ fontSize: 12, color: C.text, opacity: 0.82 }}>پیش‌نمایش تصویر</div>
-              <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", background: C.surface2 }}>
-                <img src={t.tradeImage} alt="پیش‌نمایش معامله" style={{ width: "100%", display: "block", maxHeight: 240, objectFit: "cover" }} />
-              </div>
-              <button type="button" onClick={clearImage} style={{ alignSelf: "flex-start", background: "transparent", color: C.red, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontFamily: FONT_UI }}>
-                حذف تصویر
-              </button>
-            </div>
-          ) : (
-            <div style={{ border: `1px dashed ${C.border}`, borderRadius: 12, padding: 16, color: C.muted, fontSize: 12, lineHeight: 1.8, background: C.surface2 }}>
-              می‌توانی اسکرین‌شات چارت، ستاپ ورود یا نتیجه معامله را اینجا اضافه کنی. تصویر همراه با خود معامله ذخیره می‌شود.
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div style={{ marginBottom: 22 }}>
-        <div style={{ fontSize: 13, color: C.gold, fontWeight: 600, marginBottom: 12 }}>چرا وارد شدم؟</div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-          {CHECKLIST_ITEMS.map((c) => {
-            const on = t.checklist[c.key];
-            return (
-              <button
-                type="button"
-                key={c.key}
-                onClick={() => setChecklist(c.key)}
-                style={{
-                  padding: "7px 14px",
-                  borderRadius: 999,
-                  fontSize: 13,
-                  fontFamily: FONT_UI,
-                  border: `1px solid ${on ? C.gold : C.border}`,
-                  background: on ? C.goldSoft : C.surface2,
-                  color: on ? C.gold : C.muted,
-                  cursor: "pointer",
-                }}
-              >
-                {on ? "☑" : "☐"} {c.label}
-              </button>
-            );
-          })}
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+      {section(
+        "تریگر و ذهنیت",
+        <>
           <Field label="تریگر ورود">
             <TextInput placeholder="مثلاً شکست ساختار + FVG" value={t.entryTrigger} onChange={(e) => set("entryTrigger", e.target.value)} />
           </Field>
@@ -480,56 +580,66 @@ function TradeForm({ initial, onSave, onCancel }) {
               ))}
             </Select>
           </Field>
-        </div>
-      </div>
-
-      {section(
-        "روانشناسی قبل از معامله",
-        <>
-          <Field label="امروز خوابم خوب بود؟">
-            <SegButton
-              value={t.goodSleep}
-              onChange={(v) => set("goodSleep", v)}
-              options={[{ value: "yes", label: "بله" }, { value: "no", label: "خیر" }]}
-            />
-          </Field>
-          <Field label="امروز استرس مالی دارم؟">
-            <SegButton
-              value={t.financialStress}
-              onChange={(v) => set("financialStress", v)}
-              options={[{ value: "no", label: "خیر" }, { value: "yes", label: "بله" }]}
-            />
-          </Field>
-          <Field label="فقط دلم می‌خواد معامله داشته باشم؟">
-            <SegButton
-              value={t.onlyWantToTrade}
-              onChange={(v) => set("onlyWantToTrade", v)}
-              options={[{ value: "no", label: "خیر" }, { value: "yes", label: "بله" }]}
-            />
-          </Field>
-          <Field label="طبق پلن معامله وارد شدم؟">
-            <SegButton
-              value={t.followedPlan}
-              onChange={(v) => set("followedPlan", v)}
-              options={[{ value: "yes", label: "بله" }, { value: "no", label: "فورس بود" }]}
-            />
-          </Field>
         </>
       )}
 
-      <div style={{ marginBottom: 22 }}>
+      <div style={{ marginBottom: 28 }}>
+        <div style={{ fontSize: 13, color: C.gold, fontWeight: 600, marginBottom: 14 }}>تصویر قبل از ورود</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16, alignItems: "start" }}>
+          <Field label="آپلود تصویر چارت یا ستاپ">
+            <input type="file" accept="image/*" onChange={onEntryImageChange} disabled={uploading.entryImage} style={{ ...inputStyle, padding: 8, color: C.text }} />
+            {uploading.entryImage && <div style={{ fontSize: 12, color: C.gold, marginTop: 6 }}>در حال آپلود...</div>}
+            {uploadError.entryImage && <div style={{ fontSize: 12, color: C.red, marginTop: 6 }}>{uploadError.entryImage}</div>}
+          </Field>
+          {(previewUrl.entryImage || t.entryImage) ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontSize: 12, color: C.text, opacity: 0.82 }}>پیش‌نمایش تصویر</div>
+              <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", background: C.surface2, height: 200 }}>
+                <LazyImage src={previewUrl.entryImage || t.entryImage} alt="پیش‌نمایش قبل از ورود" style={{ width: "100%", height: "100%", display: "block", objectFit: "cover" }} />
+              </div>
+              <button type="button" onClick={() => clearImage("entryImage")} style={{ alignSelf: "flex-start", background: "transparent", color: C.red, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontFamily: FONT_UI }}>
+                حذف تصویر
+              </button>
+            </div>
+          ) : (
+            <div style={{ border: `1px dashed ${C.border}`, borderRadius: 12, padding: 16, color: C.muted, fontSize: 12, lineHeight: 1.8, background: C.surface2 }}>
+              می‌توانی اسکرین‌شات چارت یا ستاپ ورود را اینجا اضافه کنی.
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 28 }}>
         <Field label="علت ورود به معامله">
-          <TextArea value={t.entryReason} onChange={(e) => set("entryReason", e.target.value)} />
-        </Field>
-        <div style={{ height: 12 }} />
-        <Field label="نمودار تصور من از حرکت بازار (توضیح)">
-          <TextArea value={t.marketExpectation} onChange={(e) => set("marketExpectation", e.target.value)} />
-        </Field>
-        <div style={{ height: 12 }} />
-        <Field label="آنچه در واقعیت اتفاق افتاد">
-          <TextArea value={t.whatHappened} onChange={(e) => set("whatHappened", e.target.value)} />
+          <TextArea placeholder="علت ورودت را بنویس..." value={t.entryReason} onChange={(e) => set("entryReason", e.target.value)} />
         </Field>
       </div>
+
+      {section(
+        "تصویر بعد از معامله",
+        <>
+          <Field label="آپلود تصویر بعد از معامله">
+            <input type="file" accept="image/*" onChange={onExitImageChange} disabled={uploading.exitImage} style={{ ...inputStyle, padding: 8, color: C.text }} />
+            {uploading.exitImage && <div style={{ fontSize: 12, color: C.gold, marginTop: 6 }}>در حال آپلود...</div>}
+            {uploadError.exitImage && <div style={{ fontSize: 12, color: C.red, marginTop: 6 }}>{uploadError.exitImage}</div>}
+          </Field>
+          {(previewUrl.exitImage || t.exitImage) ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontSize: 12, color: C.text, opacity: 0.82 }}>پیش‌نمایش تصویر</div>
+              <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", background: C.surface2, height: 200 }}>
+                <LazyImage src={previewUrl.exitImage || t.exitImage} alt="پیش‌نمایش بعد از معامله" style={{ width: "100%", height: "100%", display: "block", objectFit: "cover" }} />
+              </div>
+              <button type="button" onClick={() => clearImage("exitImage")} style={{ alignSelf: "flex-start", background: "transparent", color: C.red, border: `1px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontFamily: FONT_UI }}>
+                حذف تصویر
+              </button>
+            </div>
+          ) : (
+            <div style={{ border: `1px dashed ${C.border}`, borderRadius: 12, padding: 16, color: C.muted, fontSize: 12, lineHeight: 1.8, background: C.surface2 }}>
+              می‌توانی تصویر بعد از معامله را اینجا آپلود کنی.
+            </div>
+          )}
+        </>
+      )}
 
       {section(
         "نتیجه معامله",
@@ -539,9 +649,6 @@ function TradeForm({ initial, onSave, onCancel }) {
           </Field>
           <Field label="دارایی بعد از معامله">
             <TextInput type="number" step="any" value={t.equityAfter} onChange={(e) => set("equityAfter", e.target.value)} />
-          </Field>
-          <Field label="پیش‌بینی سود درصدی">
-            <TextInput type="number" step="any" value={t.predictedProfitPercent} onChange={(e) => set("predictedProfitPercent", e.target.value)} />
           </Field>
           <Field label="سود / زیان واقعی">
             <TextInput type="number" step="any" value={t.actualPnL} onChange={(e) => set("actualPnL", e.target.value)} />
@@ -560,9 +667,9 @@ function TradeForm({ initial, onSave, onCancel }) {
         </>
       )}
 
-      <div style={{ marginBottom: 22 }}>
-        <div style={{ fontSize: 13, color: C.gold, fontWeight: 600, marginBottom: 12 }}>مرور و درس‌ها</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
+      <div style={{ marginBottom: 28 }}>
+        <div style={{ fontSize: 13, color: C.gold, fontWeight: 600, marginBottom: 14 }}>مرور و درس‌ها</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
           <Field label="اشتباه من">
             <TextArea value={t.mistake} onChange={(e) => set("mistake", e.target.value)} />
           </Field>
@@ -570,28 +677,30 @@ function TradeForm({ initial, onSave, onCancel }) {
             <TextArea value={t.lesson} onChange={(e) => set("lesson", e.target.value)} />
           </Field>
         </div>
-        <div style={{ height: 12 }} />
+        <div style={{ height: 16 }} />
         <Field label="معامله بر چه اساسی به تمام رسید؟">
           <TextArea value={t.mainTakeaway} onChange={(e) => set("mainTakeaway", e.target.value)} />
         </Field>
       </div>
 
-      <div style={{ display: "flex", gap: 10, justifyContent: "flex-start" }}>
+      <div style={{ display: "flex", gap: 12, justifyContent: "flex-start", flexWrap: "wrap" }}>
         <button
           type="submit"
+          disabled={submitting}
           style={{
             background: C.gold,
             color: "#1A1408",
             border: "none",
             borderRadius: 9,
-            padding: "11px 26px",
+            padding: "12px 28px",
             fontFamily: FONT_UI,
             fontWeight: 700,
             fontSize: 14,
-            cursor: "pointer",
+            cursor: submitting ? "default" : "pointer",
+            opacity: submitting ? 0.6 : 1,
           }}
         >
-          ذخیره معامله
+          {submitting ? "در حال ذخیره..." : "ذخیره معامله"}
         </button>
         <button
           type="button"
@@ -601,7 +710,7 @@ function TradeForm({ initial, onSave, onCancel }) {
             color: C.muted,
             border: `1px solid ${C.border}`,
             borderRadius: 9,
-            padding: "11px 22px",
+            padding: "12px 24px",
             fontFamily: FONT_UI,
             fontSize: 14,
             cursor: "pointer",
@@ -618,7 +727,21 @@ function TradeForm({ initial, onSave, onCancel }) {
    History
 --------------------------------------------------------------- */
 function HistoryView({ trades, onEdit, onDelete }) {
+  const [zoomImage, setZoomImage] = useState("");
   const sorted = [...trades].sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+  const yn = (v) => (v === "yes" ? "بله" : v === "no" ? "خیر" : "—");
+  const checklistLabel = (t) => {
+    const tags = CHECKLIST_ITEMS.filter((c) => t.checklist?.[c.key]).map((c) => c.label);
+    return tags.length ? tags.join(" + ") : "—";
+  };
+
+  const DetailRow = ({ label, value }) => (
+    <div style={{ display: "grid", gridTemplateColumns: "130px 1fr", gap: 8, padding: "7px 0", borderBottom: `1px dashed ${C.borderSoft}` }}>
+      <div style={{ fontSize: 12, color: C.faint }}>{label}</div>
+      <div style={{ fontSize: 13, color: C.text, lineHeight: 1.9, wordBreak: "break-word" }}>{value || "—"}</div>
+    </div>
+  );
+
   if (!sorted.length) {
     return (
       <Card>
@@ -626,6 +749,7 @@ function HistoryView({ trades, onEdit, onDelete }) {
       </Card>
     );
   }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {sorted.map((t) => (
@@ -648,19 +772,19 @@ function HistoryView({ trades, onEdit, onDelete }) {
                 {t.direction === "buy" ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
               </div>
               <div>
-                <div style={{ fontFamily: FONT_MONO, fontSize: 15, color: C.text }}>{t.symbol || "—"}</div>
-                <div style={{ fontSize: 12, color: C.faint }}>
+                <div style={{ fontFamily: FONT_MONO, fontSize: 18, color: C.text }}>{t.symbol || "—"}</div>
+                <div style={{ fontSize: 14, color: C.faint }}>
                   {t.date} · {t.time} · {t.style === "scalp" ? "Scalp" : "Swing"}
                 </div>
               </div>
             </div>
-            <div style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.muted, whiteSpace: "nowrap" }}>
-              RR {t.riskReward || "—"}
-            </div>
-            <div style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.muted, whiteSpace: "nowrap" }}>
+
+            <div style={{ fontFamily: FONT_MONO, fontSize: 16, color: C.muted, whiteSpace: "nowrap" }}>RR {t.riskReward || "—"}</div>
+            <div style={{ fontFamily: FONT_MONO, fontSize: 16, color: C.muted, whiteSpace: "nowrap" }}>
               {t.actualPnL !== "" ? `${t.actualPnL}$` : "—"}
             </div>
-            <ResultBadge result={t.result} />
+            <ResultBadge result={t.result} fontSize={13} />
+
             <div style={{ display: "flex", gap: 6 }}>
               <button
                 onClick={() => onEdit(t)}
@@ -676,18 +800,119 @@ function HistoryView({ trades, onEdit, onDelete }) {
               </button>
             </div>
           </div>
-          {t.tradeImage && (
-            <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "minmax(0, 240px) 1fr", gap: 12, alignItems: "start" }}>
-              <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", background: C.surface2 }}>
-                <img src={t.tradeImage} alt={`${t.symbol || "trade"} image`} style={{ width: "100%", display: "block", maxHeight: 160, objectFit: "cover" }} />
-              </div>
-              <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.8 }}>
-                تصویر ثبت‌شده برای این معامله ذخیره شده و می‌توانی همان‌جا وضعیت چارت یا ستاپ را دوباره بررسی کنی.
-              </div>
+
+          <div className="history-details-layout" style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr", gap: 12, alignItems: "start" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
+              {[
+                { src: t.entryImage, label: "قبل از ورود" },
+                { src: t.exitImage, label: "بعد از معامله" },
+              ].map((img, i) =>
+                img.src ? (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => setZoomImage(img.src)}
+                    title="نمایش تصویر در اندازه بزرگ"
+                    style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", background: C.surface2, padding: 0, width: "100%", height: 150, cursor: "zoom-in", position: "relative" }}
+                  >
+                    <LazyImage src={img.src} alt={`${t.symbol || "trade"} - ${img.label}`} style={{ width: "100%", height: "100%", display: "block", objectFit: "cover" }} />
+                    <span style={{ position: "absolute", bottom: 6, right: 6, background: "rgba(11,14,20,0.75)", color: C.text, fontSize: 10, padding: "2px 8px", borderRadius: 999, zIndex: 1 }}>{img.label}</span>
+                  </button>
+                ) : (
+                  <div key={i} style={{ border: `1px dashed ${C.border}`, borderRadius: 12, padding: 14, color: C.muted, fontSize: 12, background: C.surface2 }}>
+                    تصویر «{img.label}» ثبت نشده.
+                  </div>
+                )
+              )}
             </div>
-          )}
+
+            <div style={{ border: `1px solid ${C.borderSoft}`, borderRadius: 12, padding: "8px 12px", background: C.surface2 }}>
+              <div style={{ fontSize: 12, color: C.gold, marginBottom: 6, fontWeight: 600 }}>جزئیات کامل معامله</div>
+              <DetailRow label="نماد" value={t.symbol || "—"} />
+              <DetailRow label="تاریخ" value={t.date || "—"} />
+              <DetailRow label="ساعت" value={t.time || "—"} />
+              <DetailRow label="جهت" value={t.direction === "buy" ? "Buy" : "Sell"} />
+              <DetailRow label="سبک" value={t.style === "scalp" ? "Scalp" : "Swing"} />
+              <DetailRow label="اهرم" value={t.leverage || "—"} />
+              <DetailRow label="قیمت ورود" value={t.entryPrice} />
+              <DetailRow label="حجم" value={t.volume} />
+              <DetailRow label="حد سود ۱" value={t.tp1} />
+              <DetailRow label="حد سود ۲" value={t.tp2} />
+              <DetailRow label="حد ضرر" value={t.sl} />
+              <DetailRow label="RR" value={t.riskReward} />
+              <DetailRow label="تریگرها" value={checklistLabel(t)} />
+              <DetailRow label="تریگر ورود" value={t.entryTrigger} />
+              <DetailRow label="احساس قبل ورود" value={t.emotionBefore} />
+              <DetailRow label="خواب خوب" value={yn(t.goodSleep)} />
+              <DetailRow label="استرس مالی" value={yn(t.financialStress)} />
+              <DetailRow label="فقط می‌خواستم ترید کنم" value={yn(t.onlyWantToTrade)} />
+              <DetailRow label="طبق پلن" value={t.followedPlan === "yes" ? "بله" : "فورس بود"} />
+              <DetailRow label="علت ورود" value={t.entryReason} />
+              <DetailRow label="دارایی قبل" value={t.equityBefore} />
+              <DetailRow label="دارایی بعد" value={t.equityAfter} />
+              <DetailRow label="سود/زیان واقعی" value={t.actualPnL} />
+              <DetailRow label="نتیجه" value={t.result === "win" ? "سود" : t.result === "loss" ? "ضرر" : "سربه‌سر"} />
+              <DetailRow label="اشتباه" value={t.mistake} />
+              <DetailRow label="درس" value={t.lesson} />
+              <DetailRow label="جمع‌بندی نهایی" value={t.mainTakeaway} />
+              <div style={{ fontSize: 11, color: C.faint, marginTop: 8 }}>برای ویرایش هر کدام از موارد بالا از دکمه «ویرایش» استفاده کن.</div>
+            </div>
+          </div>
         </Card>
       ))}
+
+      {zoomImage && (
+        <div
+          onClick={() => setZoomImage("")}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(5, 8, 13, 0.88)",
+            zIndex: 1000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 18,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setZoomImage("")}
+            title="بستن"
+            style={{
+              position: "absolute",
+              top: 14,
+              left: 14,
+              width: 36,
+              height: 36,
+              borderRadius: 10,
+              border: `1px solid ${C.border}`,
+              background: C.surface,
+              color: C.text,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <X size={18} />
+          </button>
+
+          <img
+            src={zoomImage}
+            alt="نمایش بزرگ تصویر معامله"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxWidth: "min(1100px, 96vw)",
+              maxHeight: "90vh",
+              objectFit: "contain",
+              borderRadius: 12,
+              border: `1px solid ${C.border}`,
+              background: C.surface2,
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -818,24 +1043,46 @@ function LoginScreen() {
 
   const submit = async (e) => {
     e.preventDefault();
+    if (busy) return;
     setError("");
     setBusy(true);
+
+    if (!supabase) {
+      setError(
+        `تنظیمات Supabase ناقص است. این متغیرها را در env تنظیم کن: ${supabaseConfigStatus.missing.join(", "
+        )}`
+      );
+      setBusy(false);
+      return;
+    }
+
     try {
       if (mode === "signup") {
-        await createUserWithEmailAndPassword(auth, email, password);
+        const { error: signUpError } = await supabase.auth.signUp({ email, password });
+        if (signUpError) throw signUpError;
       } else {
-        await signInWithEmailAndPassword(auth, email, password);
+        const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+        if (signInError) throw signInError;
       }
     } catch (err) {
+      const status = Number(err?.status || err?.statusCode || 0);
+      const code = err?.code;
+      const message = err?.message;
+
+      if (status === 429 || code === "over_request_rate_limit") {
+        setError("تعداد درخواست‌ها زیاد شده است. حدود 60 ثانیه صبر کن و دوباره تلاش کن.");
+        return;
+      }
+
       const map = {
-        "auth/invalid-email": "ایمیل معتبر نیست.",
-        "auth/email-already-in-use": "این ایمیل قبلاً ثبت شده — وارد شو.",
-        "auth/weak-password": "رمز عبور باید حداقل ۶ کاراکتر باشد.",
-        "auth/invalid-credential": "ایمیل یا رمز عبور اشتباه است.",
-        "auth/user-not-found": "حسابی با این ایمیل پیدا نشد.",
-        "auth/wrong-password": "رمز عبور اشتباه است.",
+        invalid_credentials: "ایمیل یا رمز عبور اشتباه است.",
+        email_address_invalid: "ایمیل معتبر نیست.",
+        weak_password: "رمز عبور باید حداقل ۶ کاراکتر باشد.",
+        user_already_exists: "این ایمیل قبلا ثبت شده است. وارد شو.",
+        "Invalid login credentials": "ایمیل یا رمز عبور اشتباه است.",
+        "User already registered": "این ایمیل قبلا ثبت شده است. وارد شو.",
       };
-      setError(map[err.code] || "خطایی رخ داد. دوباره تلاش کن.");
+      setError(map[code] || map[message] || "خطایی رخ داد. دوباره تلاش کن.");
     } finally {
       setBusy(false);
     }
@@ -898,45 +1145,233 @@ function Journal({ user }) {
   const [tab, setTab] = useState("dashboard");
   const [editing, setEditing] = useState(null);
   const [saveState, setSaveState] = useState("idle");
+  const [saveError, setSaveError] = useState("");
+  const [toast, setToast] = useState(null);
 
-  const userDoc = doc(db, "users", user.uid);
+  const storageKey = `trademind_trades_${user?.id || "guest"}`;
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const snap = await getDoc(userDoc);
-        if (snap.exists() && snap.data().trades) setTrades(snap.data().trades);
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user.uid]);
-
-  const persist = async (list) => {
-    setTrades(list);
-    setSaveState("saving");
+  const readLocalTrades = () => {
     try {
-      await setDoc(userDoc, { trades: list }, { merge: true });
-      setSaveState("saved");
-      setTimeout(() => setSaveState("idle"), 1200);
-    } catch (e) {
-      console.error(e);
-      setSaveState("idle");
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+      console.warn("Failed to read local trades:", error);
+      return [];
     }
   };
 
-  const handleSave = (trade) => {
-    const exists = trades.some((t) => t.id === trade.id);
-    const list = exists ? trades.map((t) => (t.id === trade.id ? trade : t)) : [...trades, trade];
-    persist(list);
-    setEditing(null);
-    setTab("history");
+  const writeLocalTrades = (list) => {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(list));
+    } catch (error) {
+      console.warn("Failed to write local trades:", error);
+    }
   };
 
-  const handleDelete = (id) => persist(trades.filter((t) => t.id !== id));
+  const normalizeChecklist = (value) => {
+    const base = { mss: false, sweep: false, fvg: false, discount: false, divergence: false, trendline: false };
+    if (!value || typeof value !== "object") return base;
+    return { ...base, ...value };
+  };
+
+  const normalizeImageUrl = (value) => {
+    if (typeof value !== "string") return "";
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    return trimmed;
+  };
+
+  const mapRowToTrade = (row) => ({
+    id: row.id ? `db-${row.id}` : uid(),
+    dbId: row.id ?? null,
+    date: row.date || "",
+    time: row.time || "",
+    symbol: row.symbol || "",
+    direction: row.direction || "buy",
+    style: row.style || "scalp",
+    leverage: row.leverage ?? "",
+    entryPrice: row.entry_price ?? "",
+    volume: row.volume ?? "",
+    tp1: row.tp1 ?? "",
+    tp2: row.tp2 ?? "",
+    sl: row.sl ?? "",
+    riskReward: row.risk_reward ?? "",
+    entryReason: row.entry_reason ?? "",
+    checklist: normalizeChecklist(row.checklist),
+    entryTrigger: row.entry_trigger ?? "",
+    emotionBefore: row.emotion_before ?? EMOTIONS[0],
+    goodSleep: row.good_sleep ?? "yes",
+    financialStress: row.financial_stress ?? "no",
+    onlyWantToTrade: row.only_want_to_trade ?? "no",
+    marketExpectation: row.market_expectation ?? "",
+    whatHappened: row.what_happened ?? "",
+    equityBefore: row.equity_before ?? "",
+    equityAfter: row.equity_after ?? "",
+    predictedProfitPercent: row.predicted_profit_percent ?? "",
+    actualPnL: row.actual_pnl ?? "",
+    result: row.result || "be",
+    followedPlan: row.followed_plan ?? "yes",
+    mistake: row.mistake ?? "",
+    lesson: row.lesson ?? "",
+    mainTakeaway: row.main_takeaway ?? "",
+    entryImage: normalizeImageUrl(row.entry_image),
+    exitImage: normalizeImageUrl(row.exit_image),
+  });
+
+  const mapTradeToRow = (trade) => ({
+    user_id: user.id,
+    date: trade.date,
+    time: trade.time,
+    symbol: trade.symbol,
+    direction: trade.direction,
+    style: trade.style,
+    leverage: trade.leverage || null,
+    entry_price: trade.entryPrice || null,
+    volume: trade.volume || null,
+    tp1: trade.tp1 || null,
+    tp2: trade.tp2 || null,
+    sl: trade.sl || null,
+    risk_reward: trade.riskReward || null,
+    entry_reason: trade.entryReason || null,
+    checklist: normalizeChecklist(trade.checklist),
+    entry_trigger: trade.entryTrigger || null,
+    emotion_before: trade.emotionBefore || null,
+    good_sleep: trade.goodSleep || null,
+    financial_stress: trade.financialStress || null,
+    only_want_to_trade: trade.onlyWantToTrade || null,
+    market_expectation: trade.marketExpectation || null,
+    what_happened: trade.whatHappened || null,
+    equity_before: trade.equityBefore || null,
+    equity_after: trade.equityAfter || null,
+    predicted_profit_percent: trade.predictedProfitPercent || null,
+    actual_pnl: trade.actualPnL || null,
+    result: trade.result || "be",
+    followed_plan: trade.followedPlan || null,
+    mistake: trade.mistake || null,
+    lesson: trade.lesson || null,
+    main_takeaway: trade.mainTakeaway || null,
+    entry_image: normalizeImageUrl(trade.entryImage) || null,
+    exit_image: normalizeImageUrl(trade.exitImage) || null,
+    created_at: new Date().toISOString(),
+  });
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  useEffect(() => {
+    const loadTrades = async () => {
+      if (!supabase) {
+        setTrades(readLocalTrades());
+        setLoading(false);
+        return;
+      }
+
+      try {
+        console.log("Current user:", user.id);
+
+        const { data, error } = await supabase
+          .from("trades")
+          .select("*")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false });
+
+        console.log("Loaded data:", data);
+        console.log("Loaded error:", error);
+
+        if (error) {
+          throw error;
+        }
+
+        const mappedTrades = Array.isArray(data) ? data.map(mapRowToTrade) : [];
+        setTrades(mappedTrades);
+        writeLocalTrades(mappedTrades);
+
+        console.log("Loaded trades:", mappedTrades);
+      } catch (error) {
+        console.error("Loading trades failed:", error);
+        const localTrades = readLocalTrades();
+        setTrades(localTrades);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadTrades();
+  }, [storageKey, user.id]);
+
+  const persist = async (trade) => {
+    setSaveState("saving");
+
+    if (!supabase) {
+      setSaveState("error");
+      setSaveError("اتصال Supabase برقرار نیست — بررسی کن مقادیر VITE_SUPABASE_URL و VITE_SUPABASE_ANON_KEY در تنظیمات Vercel درست ثبت شده باشن.");
+      return null;
+    }
+
+    try {
+      const row = mapTradeToRow(trade);
+
+      let response;
+      if (trade.dbId) {
+        response = await supabase.from("trades").update(row).eq("id", trade.dbId).select();
+      } else {
+        response = await supabase.from("trades").insert(row).select();
+      }
+
+      const { data, error } = response;
+      if (error) throw error;
+
+      const savedRow = Array.isArray(data) ? data[0] : null;
+      setSaveState("saved");
+      setSaveError("");
+      setTimeout(() => setSaveState("idle"), 1200);
+      return savedRow;
+    } catch (error) {
+      console.error("Saving failed:", error);
+      setSaveState("error");
+      setSaveError(error?.message || "ذخیره در سرور ناموفق بود. این معامله فقط روی همین دستگاه ذخیره شد.");
+      return null;
+    }
+  };
+
+  const handleSave = async (trade) => {
+    const exists = trades.some((t) => t.id === trade.id);
+    const nextList = exists ? trades.map((t) => (t.id === trade.id ? trade : t)) : [...trades, trade];
+    setTrades(nextList);
+    writeLocalTrades(nextList);
+    setEditing(null);
+    setTab("history");
+
+    const savedRow = await persist(trade);
+
+    if (savedRow) {
+      const savedTrade = mapRowToTrade(savedRow);
+      const finalList = nextList.map((t) => (t.id === trade.id ? { ...t, ...savedTrade, dbId: savedRow.id } : t));
+      setTrades(finalList);
+      writeLocalTrades(finalList);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    const targetTrade = trades.find((t) => t.id === id);
+
+    if (targetTrade?.dbId && supabase) {
+      try {
+        await supabase.from("trades").delete().eq("id", targetTrade.dbId);
+      } catch (error) {
+        console.error("Delete failed:", error);
+      }
+    }
+
+    const nextList = trades.filter((t) => t.id !== id);
+    setTrades(nextList);
+    writeLocalTrades(nextList);
+  };
 
   const startNew = () => {
     setEditing(emptyTrade());
@@ -954,6 +1389,11 @@ function Journal({ user }) {
         * { box-sizing: border-box; }
         input::placeholder, textarea::placeholder { color: ${C.faint}; }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        @keyframes skeleton-pulse { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+        .history-details-layout { grid-template-columns: 1fr; }
+        @media (min-width: 900px) {
+          .history-details-layout { grid-template-columns: minmax(0, 260px) 1fr; }
+        }
         @media (min-width: 768px) { .mobile-nav { display: none; } }
         @media (max-width: 767px) { .desktop-nav { display: none; } }
       `}</style>
@@ -966,7 +1406,7 @@ function Journal({ user }) {
           <div style={{ fontFamily: FONT_TITLE, fontSize: "clamp(24px, 5vw, 28px)", fontWeight: 400, letterSpacing: 0.2 }}>TradeMind</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={{ fontSize: 11, color: C.faint, display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ fontSize: 11, color: saveState === "error" ? C.red : C.faint, display: "flex", alignItems: "center", gap: 6, maxWidth: 260, textAlign: "left" }}>
             {saveState === "saving" && (
               <>
                 <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} />
@@ -974,9 +1414,10 @@ function Journal({ user }) {
               </>
             )}
             {saveState === "saved" && "ذخیره شد ✓"}
+            {saveState === "error" && `ذخیره نشد — ${saveError}`}
           </div>
           <button
-            onClick={() => signOut(auth)}
+            onClick={() => supabase?.auth.signOut()}
             title="خروج"
             style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 8, padding: 7, cursor: "pointer", display: "flex" }}
           >
@@ -984,6 +1425,45 @@ function Journal({ user }) {
           </button>
         </div>
       </div>
+
+      {toast ? (
+        <div
+          style={{
+            position: "fixed",
+            top: 16,
+            left: 16,
+            zIndex: 2000,
+            maxWidth: "min(360px, calc(100vw - 32px))",
+            padding: "12px 14px",
+            borderRadius: 12,
+            border: `1px solid ${toast.type === "error" ? C.red : C.gold}`,
+            background: toast.type === "error" ? C.redSoft : C.goldSoft,
+            color: toast.type === "error" ? C.red : C.gold,
+            boxShadow: "0 12px 30px rgba(0,0,0,0.28)",
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 10,
+          }}
+        >
+          <div style={{ flex: 1, fontSize: 13, lineHeight: 1.7 }}>{toast.text}</div>
+          <button
+            type="button"
+            onClick={() => setToast(null)}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "inherit",
+              cursor: "pointer",
+              padding: 0,
+              fontSize: 14,
+              lineHeight: 1,
+            }}
+            aria-label="بستن اعلان"
+          >
+            ✕
+          </button>
+        </div>
+      ) : null}
 
       <div style={{ display: "flex", gap: 6, padding: "14px 20px 0" }} className="desktop-nav">
         {TABS.map((tItem) => {
@@ -1037,7 +1517,7 @@ function Journal({ user }) {
                 <X size={18} />
               </button>
             </div>
-            <TradeForm initial={editing} onSave={handleSave} onCancel={() => setTab("dashboard")} />
+            <TradeForm initial={editing} onSave={handleSave} onCancel={() => setTab("dashboard")} userId={user.id} onNotify={(type, text) => setToast({ type, text })} />
           </Card>
         ) : null}
       </div>
@@ -1066,8 +1546,22 @@ export default function App() {
   const [user, setUser] = useState(undefined); // undefined = checking, null = signed out
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => setUser(u));
-    return unsub;
+    if (!supabase) {
+      setUser(null);
+      return;
+    }
+
+    supabase.auth.getSession().then(({ data }) => {
+      setUser(data.session?.user ?? null);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
   if (user === undefined) {

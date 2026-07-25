@@ -1,84 +1,79 @@
-# TradeMind — راهنمای پابلیش رایگان
+# TradeMind - Setup with Supabase
 
-این پروژه یه اپ کامل ژورنال معاملاتیه که با **گیت‌هاب (رایگان)**، **Vercel (هاست رایگان)** و **Firebase (دیتابیس رایگان)** پابلیش میشه. بعد از این کار، یه آدرس اینترنتی مستقل (مثل `trademind-abolfazl.vercel.app`) داری که روی گوشی و لپ‌تاپ، مستقل از Claude، بازش می‌کنی و اطلاعات بین‌شون سینک میشه. هیچ هزینه‌ای هم نداره (در حد استفاده شخصی، تو پلن رایگان همه‌ی این سرویس‌ها جا میشی).
+این نسخه از TradeMind به طور کامل از Supabase برای احراز هویت و ذخیره اطلاعات استفاده می کند.
 
-کل کار حدود ۲۰-۳۰ دقیقه زمان می‌بره و فقط کلیک کردنه، نیازی به دستور نوشتن (Terminal) نیست.
+## 1) ساخت پروژه Supabase
 
----
+1. وارد https://supabase.com شو و یک پروژه جدید بساز.
+2. بعد از ساخته شدن پروژه، از مسیر Project Settings > API دو مقدار زیر را بردار:
+- `Project URL`
+- `anon public key`
 
-## مرحله ۱ — ساخت پروژه Firebase (دیتابیس رایگان)
+## 2) ساخت جدول دیتابیس
 
-۱. برو به [console.firebase.google.com](https://console.firebase.google.com) و با جیمیل خودت وارد شو.
-۲. روی **Add project** بزن، یه اسم بده (مثلاً `trademind`) و پروژه رو بساز (Google Analytics رو می‌تونی خاموش کنی، لازم نیست).
-۳. از منوی سمت راست، برو به **Build → Authentication** → **Get started**. تب **Sign-in method** رو باز کن، روی **Email/Password** بزن و **Enable** کن.
-۴. از منوی سمت راست برو به **Build → Firestore Database** → **Create database**. حالت **Production mode** رو انتخاب کن و یه location نزدیک (مثلاً `eur3` یا هرچی پیش‌فرض بود) رو انتخاب کن.
-۵. بعد از ساخته شدن دیتابیس، برو به تب **Rules** و محتوای داخلش رو با این جایگزین کن، بعد **Publish** بزن:
+در SQL Editor این کوئری را اجرا کن:
 
-```
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-    }
-  }
-}
-```
+```sql
+create table if not exists public.user_trades (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  trades jsonb not null default '[]'::jsonb,
+  updated_at timestamptz not null default now()
+);
 
-این یعنی هر کاربر فقط به داده‌های خودش دسترسی داره.
+alter table public.user_trades enable row level security;
 
-۶. برو به آیکون چرخ‌دنده بالا سمت چپ → **Project settings**. پایین صفحه، بخش **Your apps** → روی آیکون `</>` (Web) بزن، یه اسم بده و **Register app**.
-۷. یه کد `firebaseConfig` بهت نشون میده شبیه این:
+create policy "Users can read own trades"
+on public.user_trades
+for select
+using (auth.uid() = user_id);
 
-```js
-const firebaseConfig = {
-  apiKey: "AIza...",
-  authDomain: "trademind-xxxx.firebaseapp.com",
-  projectId: "trademind-xxxx",
-  storageBucket: "trademind-xxxx.appspot.com",
-  messagingSenderId: "...",
-  appId: "..."
-};
+create policy "Users can insert own trades"
+on public.user_trades
+for insert
+with check (auth.uid() = user_id);
+
+create policy "Users can update own trades"
+on public.user_trades
+for update
+using (auth.uid() = user_id)
+with check (auth.uid() = user_id);
 ```
 
-این مقادیر رو نگه دار، مرحله بعد لازمشون داری.
+## 3) فعال سازي ايميل/پسورد
 
----
+از مسير Authentication > Providers، گزينه Email را فعال کن.
 
-## مرحله ۲ — وارد کردن مقادیر Firebase توی پروژه
+## 4) تنظيم متغيرهاي محيطي در پروژه
 
-فایل `src/firebase.js` رو باز کن و مقادیر `PASTE_YOUR_...` رو با همون مقادیری که از Firebase گرفتی جایگزین کن.
+يک فايل `.env` در ريشه پروژه بساز و اين مقادير را قرار بده (پیشنهادی برای Vite):
 
----
+```env
+VITE_SUPABASE_URL=https://YOUR_PROJECT_ID.supabase.co
+VITE_SUPABASE_ANON_KEY=YOUR_SUPABASE_ANON_KEY
+```
 
-## مرحله ۳ — آپلود پروژه روی GitHub (بدون نیاز به دستور)
+نکته: اگر قبلا متغيرها را با پيشوند `NEXT_PUBLIC_` گذاشته‌اي، اين نسخه از پروژه همان‌ها را هم مي‌خواند:
 
-۱. برو به [github.com](https://github.com) و یه حساب رایگان بساز (اگه نداری).
-۲. روی **New repository** بزن، اسمش رو بذار `trademind`، **Public** یا **Private** فرقی نداره، بزن **Create repository**.
-۳. توی صفحه‌ی خالی repo، لینک **uploading an existing file** رو بزن.
-۴. تمام فایل‌ها و پوشه‌ی `src` این پروژه رو (همونایی که الان ازم گرفتی) بکش و بنداز توی اون صفحه، بعد **Commit changes** بزن.
+```env
+NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT_ID.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=YOUR_SUPABASE_PUBLISHABLE_KEY
+```
 
----
+## 5) اجراي پروژه
 
-## مرحله ۴ — پابلیش روی Vercel (هاست رایگان)
+```bash
+npm install
+npm run dev
+```
 
-۱. برو به [vercel.com](https://vercel.com) و با همون حساب GitHub وارد شو (**Continue with GitHub**).
-۲. روی **Add New → Project** بزن.
-۳. repo ی `trademind` که ساختی رو پیدا کن و **Import** بزن.
-۴. Vercel خودش تشخیص میده که پروژه Vite هست، نیازی به تغییر تنظیمات نیست. روی **Deploy** بزن.
-۵. بعد از ۱-۲ دقیقه، یه آدرس مثل `trademind-yourname.vercel.app` بهت میده — همینه، آدرس نهایی اپ توئه، کاملاً رایگان.
+## Deploy
 
----
+اگر روي Vercel يا هر سرويس ديگر deploy مي کني، همين دو متغير محيطي را در Environment Variables ست کن:
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
 
-## مرحله ۵ — استفاده
+در صورت استفاده از الگوی قبلي، مي‌تواني `NEXT_PUBLIC_SUPABASE_URL` و `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` را هم ست کني.
 
-۱. اون آدرس رو روی گوشی و لپ‌تاپ باز کن.
-۲. اولین بار، با یه ایمیل و رمز عبور دلخواه **حساب بساز** (Sign up).
-۳. روی هر دستگاه دیگه‌ای با همون ایمیل و رمز **وارد شو** (Sign in) — چون داده‌ها روی Firestore ذخیره میشن، بین دستگاه‌ها سینک میشن.
-۴. اگه خواستی می‌تونی صفحه رو از مرورگر گوشی به‌صورت "Add to Home Screen" به صفحه اصلی گوشی اضافه کنی تا شبیه یه اپ مستقل باز بشه.
+## نکته امنيتي
 
----
-
-## نکته درباره‌ی هزینه
-
-پلن رایگان Firebase (Spark) و Vercel (Hobby) برای استفاده‌ی شخصی یه نفره کاملاً کافیه و هزینه‌ای نداره. اگه بعداً خواستی این رو تبدیل به محصول (SaaS) کنی که کاربرهای دیگه هم ثبت‌نام کنن، همون موقع باید محدودیت‌های پلن رایگان رو بررسی کنی.
+از `service_role key` در فرانت اند استفاده نکن. فقط `anon public key` مجاز است.
