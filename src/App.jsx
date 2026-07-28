@@ -96,23 +96,20 @@ const emptyTrade = () => ({
   direction: "long",
   style: "scalp",
   leverage: "",
-  entryPrice: "",
   volume: "",
-  tp1: "",
-  tp2: "",
-  sl: "",
+  takeProfit: "",
   riskReward: "",
   entryReason: "",
   checklist: { mss: false, sweep: false, fvg: false, discount: false, divergence: false, trendline: false },
   entryTrigger: "",
   emotionBefore: "",
+  entrySignal: "",
   marketExpectation: "",
   whatHappened: "",
   equityBefore: "",
   equityAfter: "",
   predictedProfitPercent: "",
-  actualPnL: "",
-  result: "win",
+  result: "",
   mistake: "",
   lesson: "",
   mainTakeaway: "",
@@ -210,13 +207,13 @@ function TextArea(props) {
 }
 function Select({ children, ...props }) {
   return (
-    <select {...props} style={inputStyle}>
+    <select {...props} style={{ ...inputStyle, ...(props.style || {}) }}>
       {children}
     </select>
   );
 }
 
-function SegButton({ options, value, onChange }) {
+function SegButton({ options, value, onChange, allowEmpty = false }) {
   return (
     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
       {options.map((o) => {
@@ -226,13 +223,21 @@ function SegButton({ options, value, onChange }) {
             ? { bg: C.greenSoft, border: C.green, color: C.green }
             : o.value === "short"
               ? { bg: C.redSoft, border: C.red, color: C.red }
-              : { bg: C.goldSoft, border: C.gold, color: C.gold }
+              : o.value === "risk_free"
+                ? { bg: C.blue + "22", border: C.blue, color: C.blue }
+                : { bg: C.goldSoft, border: C.gold, color: C.gold }
           : undefined;
         return (
           <button
             type="button"
             key={o.value}
-            onClick={() => onChange(o.value)}
+            onClick={() => {
+              if (allowEmpty && active) {
+                onChange("");
+                return;
+              }
+              onChange(o.value);
+            }}
             style={{
               flex: 1,
               minWidth: 100,
@@ -285,9 +290,10 @@ function ResultBadge({ result, fontSize = 11 }) {
   const map = {
     win: { c: C.green, bg: C.greenSoft, t: "سود" },
     loss: { c: C.red, bg: C.redSoft, t: "ضرر" },
-    be: { c: C.muted, bg: C.surface2, t: "سربه‌سر" },
+    risk_free: { c: C.blue, bg: C.surface2, t: "ریسک فری" },
   };
-  const s = map[result] || map.be;
+  if (!result) return null;
+  const s = map[result] || map.risk_free;
   return (
     <span
       style={{
@@ -554,20 +560,11 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
       {section(
         "جزئیات ورود",
         <>
-          <Field label="قیمت ورود">
-            <TextInput type="text" inputMode="decimal" value={t.entryPrice} onChange={(e) => set("entryPrice", e.target.value)} />
-          </Field>
           <Field label="حجم">
             <TextInput type="text" inputMode="decimal" value={t.volume} onChange={(e) => set("volume", e.target.value)} />
           </Field>
-          <Field label="حد سود ۱ (TP1)">
-            <TextInput type="text" inputMode="decimal" value={t.tp1} onChange={(e) => set("tp1", e.target.value)} />
-          </Field>
-          <Field label="حد سود ۲ (TP2)">
-            <TextInput type="text" inputMode="decimal" value={t.tp2} onChange={(e) => set("tp2", e.target.value)} />
-          </Field>
-          <Field label="حد ضرر (SL)">
-            <TextInput type="text" inputMode="decimal" value={t.sl} onChange={(e) => set("sl", e.target.value)} />
+          <Field label="حد سود">
+            <TextInput type="text" inputMode="decimal" value={t.takeProfit} onChange={(e) => set("takeProfit", e.target.value)} />
           </Field>
           <Field label="نسبت ریسک به ریوارد (RR)">
             <TextInput type="text" inputMode="decimal" placeholder="2.5" value={t.riskReward} onChange={(e) => set("riskReward", e.target.value)} />
@@ -616,6 +613,17 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
                 )}
               </div>
             </div>
+          </Field>
+          <Field label="ورود بر اساس سیگنال">
+            <SegButton
+              value={t.entrySignal}
+              onChange={(v) => set("entrySignal", v)}
+              allowEmpty
+              options={[
+                { value: "yes", label: "بله" },
+                { value: "no", label: "خیر" },
+              ]}
+            />
           </Field>
         </>
       )}
@@ -693,17 +701,15 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
           <Field label="دارایی بعد از معامله">
             <TextInput type="text" inputMode="decimal" value={t.equityAfter} onChange={(e) => set("equityAfter", e.target.value)} />
           </Field>
-          <Field label="سود / زیان واقعی">
-            <TextInput type="text" inputMode="decimal" value={t.actualPnL} onChange={(e) => set("actualPnL", e.target.value)} />
-          </Field>
           <Field label="نتیجه">
             <SegButton
               value={t.result}
               onChange={(v) => set("result", v)}
+              allowEmpty
               options={[
                 { value: "win", label: "سود" },
                 { value: "loss", label: "ضرر" },
-                { value: "be", label: "سربه‌سر" },
+                { value: "risk_free", label: "ریسک فری" },
               ]}
             />
           </Field>
@@ -772,7 +778,36 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
 function HistoryView({ trades, onEdit, onDelete }) {
   const [zoomImage, setZoomImage] = useState("");
   const [selectedTradeId, setSelectedTradeId] = useState(null);
-  const sorted = [...trades].sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+  const [historyFilter, setHistoryFilter] = useState("all");
+
+  const filteredTrades = useMemo(() => {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfWeek = new Date(today);
+    startOfWeek.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfYear = new Date(now.getFullYear(), 0, 1);
+
+    return [...trades].filter((trade) => {
+      const tradeDate = new Date(trade.date);
+      if (Number.isNaN(tradeDate.getTime())) return false;
+
+      switch (historyFilter) {
+        case "day":
+          return tradeDate >= today;
+        case "week":
+          return tradeDate >= startOfWeek;
+        case "month":
+          return tradeDate >= startOfMonth;
+        case "year":
+          return tradeDate >= startOfYear;
+        default:
+          return true;
+      }
+    });
+  }, [trades, historyFilter]);
+
+  const sorted = [...filteredTrades].sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
 
   const DetailRow = ({ label, value }) => (
     <div style={{ display: "grid", gridTemplateColumns: "130px 1fr", gap: 8, padding: "7px 0", borderBottom: `1px dashed ${C.borderSoft}` }}>
@@ -793,6 +828,19 @@ function HistoryView({ trades, onEdit, onDelete }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
+        <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.7 }}>
+          می‌توانی بازه زمانی معاملات را انتخاب کنی و آخرین معامله‌های همان بازه را ببینی.
+        </div>
+        <Select value={historyFilter} onChange={(e) => setHistoryFilter(e.target.value)} style={{ minWidth: 180 }}>
+          <option value="all">همه معاملات</option>
+          <option value="day">روز</option>
+          <option value="week">هفته</option>
+          <option value="month">ماه</option>
+          <option value="year">سال</option>
+        </Select>
+      </div>
+
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
         {sorted.map((t) => {
           const active = selectedTrade?.id === t.id;
@@ -900,18 +948,15 @@ function HistoryView({ trades, onEdit, onDelete }) {
               <DetailRow label="جهت" value={normalizeDirection(selectedTrade.direction) === "long" ? "Long" : "Short"} />
               <DetailRow label="سبک" value={selectedTrade.style === "scalp" ? "Scalp" : "Swing"} />
               <DetailRow label="اهرم" value={selectedTrade.leverage || "—"} />
-              <DetailRow label="قیمت ورود" value={selectedTrade.entryPrice} />
               <DetailRow label="حجم" value={selectedTrade.volume} />
-              <DetailRow label="حد سود ۱" value={selectedTrade.tp1} />
-              <DetailRow label="حد سود ۲" value={selectedTrade.tp2} />
-              <DetailRow label="حد ضرر" value={selectedTrade.sl} />
+              <DetailRow label="حد سود" value={selectedTrade.takeProfit} />
               <DetailRow label="RR" value={selectedTrade.riskReward} />
               <DetailRow label="احساس قبل ورود" value={selectedTrade.emotionBefore} />
+              <DetailRow label="ورود بر اساس سیگنال" value={selectedTrade.entrySignal === "yes" ? "بله" : selectedTrade.entrySignal === "no" ? "خیر" : "—"} />
               <DetailRow label="علت ورود" value={selectedTrade.entryReason} />
               <DetailRow label="دارایی قبل" value={selectedTrade.equityBefore} />
               <DetailRow label="دارایی بعد" value={selectedTrade.equityAfter} />
-              <DetailRow label="سود/زیان واقعی" value={selectedTrade.actualPnL} />
-              <DetailRow label="نتیجه" value={selectedTrade.result === "win" ? "سود" : selectedTrade.result === "loss" ? "ضرر" : "سربه‌سر"} />
+              <DetailRow label="نتیجه" value={selectedTrade.result === "win" ? "سود" : selectedTrade.result === "loss" ? "ضرر" : selectedTrade.result === "risk_free" ? "ریسک فری" : "—"} />
               <DetailRow label="اشتباه" value={selectedTrade.mistake} />
               <DetailRow label="درس" value={selectedTrade.lesson} />
               <DetailRow label="جمع‌بندی نهایی" value={selectedTrade.mainTakeaway} />
@@ -1250,23 +1295,24 @@ function Journal({ user }) {
     direction: normalizeDirection(row.direction || "long"),
     style: normalizeTextValue(row.style) ?? "scalp",
     leverage: normalizeTextValue(row.leverage) ?? "",
-    entryPrice: normalizeTextValue(row.entry_price) ?? "",
     volume: normalizeTextValue(row.volume) ?? "",
-    tp1: normalizeTextValue(row.tp1) ?? "",
-    tp2: normalizeTextValue(row.tp2) ?? "",
-    sl: normalizeTextValue(row.sl) ?? "",
+    takeProfit: normalizeTextValue(row.take_profit) ?? normalizeTextValue(row.tp1) ?? "",
     riskReward: normalizeTextValue(row.risk_reward) ?? "",
     entryReason: normalizeTextValue(row.entry_reason) ?? "",
     checklist: normalizeChecklist(row.checklist),
     entryTrigger: normalizeTextValue(row.entry_trigger) ?? "",
     emotionBefore: normalizeTextValue(row.emotion_before) ?? "",
+    entrySignal: row.entry_signal === null || row.entry_signal === undefined ? "" : row.entry_signal ? "yes" : "no",
     marketExpectation: normalizeTextValue(row.market_expectation) ?? "",
     whatHappened: normalizeTextValue(row.what_happened) ?? "",
     equityBefore: normalizeTextValue(row.equity_before) ?? "",
     equityAfter: normalizeTextValue(row.equity_after) ?? "",
     predictedProfitPercent: normalizeTextValue(row.predicted_profit_percent) ?? "",
-    actualPnL: normalizeTextValue(row.actual_pnl) ?? "",
-    result: normalizeTextValue(row.result) ?? "be",
+    result: (() => {
+      const value = normalizeTextValue(row.result);
+      if (!value || value === "be") return "";
+      return value;
+    })(),
     mistake: normalizeTextValue(row.mistake) ?? "",
     lesson: normalizeTextValue(row.lesson) ?? "",
     mainTakeaway: normalizeTextValue(row.main_takeaway) ?? "",
@@ -1282,23 +1328,20 @@ function Journal({ user }) {
     direction: normalizeDirection(trade.direction),
     style: normalizeTextValue(trade.style) ?? "scalp",
     leverage: normalizeTextValue(trade.leverage),
-    entry_price: normalizeTextValue(trade.entryPrice),
     volume: normalizeTextValue(trade.volume),
-    tp1: normalizeTextValue(trade.tp1),
-    tp2: normalizeTextValue(trade.tp2),
-    sl: normalizeTextValue(trade.sl),
+    take_profit: normalizeTextValue(trade.takeProfit),
     risk_reward: normalizeTextValue(trade.riskReward),
     entry_reason: normalizeTextValue(trade.entryReason),
     checklist: normalizeChecklist(trade.checklist),
     entry_trigger: normalizeTextValue(trade.entryTrigger),
     emotion_before: normalizeTextValue(trade.emotionBefore),
+    entry_signal: trade.entrySignal === "yes" ? true : trade.entrySignal === "no" ? false : null,
     market_expectation: normalizeTextValue(trade.marketExpectation),
     what_happened: normalizeTextValue(trade.whatHappened),
     equity_before: normalizeTextValue(trade.equityBefore),
     equity_after: normalizeTextValue(trade.equityAfter),
     predicted_profit_percent: normalizeTextValue(trade.predictedProfitPercent),
-    actual_pnl: normalizeTextValue(trade.actualPnL),
-    result: normalizeTextValue(trade.result) ?? "be",
+    result: normalizeTextValue(trade.result) || null,
     mistake: normalizeTextValue(trade.mistake),
     lesson: normalizeTextValue(trade.lesson),
     main_takeaway: normalizeTextValue(trade.mainTakeaway),
