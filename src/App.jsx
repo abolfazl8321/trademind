@@ -1,6 +1,5 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+﻿import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
-  LayoutDashboard,
   PlusCircle,
   History as HistoryIcon,
   BarChart3,
@@ -18,56 +17,59 @@ import { supabase, supabaseConfigStatus } from "./supabase.js";
    Design tokens — dark trading-terminal palette
 --------------------------------------------------------------- */
 const C = {
-  bg: "#0B0E14",
-  surface: "#12161F",
-  surface2: "#171C28",
-  border: "#232935",
-  borderSoft: "#1B212C",
-  text: "#E7EAEF",
-  muted: "#8892A0",
-  faint: "#565F6E",
-  gold: "#D8A94E",
-  goldSoft: "#3A2F1C",
-  green: "#3FBE7B",
-  greenSoft: "#123222",
-  red: "#E5584F",
-  redSoft: "#331917",
-  blue: "#5B8DEF",
+  bg: "#ffffff",
+  surface: "#ffffff",
+  surface2: "#f8fbf9",
+  border: "#2f8f62",
+  borderSoft: "#d6e5dc",
+  text: "#174b32",
+  muted: "#668074",
+  faint: "#8a9e8a",
+  gold: "#174b32",
+  goldSoft: "#e7f0eb",
+  green: "#174b32",
+  greenSoft: "#d6ead6",
+  red: "#b23a3a",
+  redSoft: "#fee2e2",
+  blue: "#5b8def",
 };
 
 const FONT_UI = "'Rubik', 'Vazirmatn', sans-serif";
 const FONT_TITLE = "'Lalezar', 'Rubik', sans-serif";
-const FONT_MONO = "'Markazi Text', 'Rubik', serif";
+const FONT_MONO = "'Rubik', serif";
 
-const CHECKLIST_ITEMS = [
-  { key: "mss", label: "MSS" },
-  { key: "sweep", label: "Sweep" },
-  { key: "fvg", label: "FVG" },
-  { key: "discount", label: "Discount" },
-  { key: "divergence", label: "Divergence" },
-  { key: "trendline", label: "Trendline" },
+const TRADE_RESULT_OPTIONS = [
+  { value: "win", label: "Win" },
+  { value: "loss", label: "Loss" },
+  { value: "be", label: "Risk Free" },
 ];
 
-const EMOTIONS = [
-  "آرام",
-  "عجول",
-  "ترس",
-  "انتقام",
-  "FOMO",
-  "اعتماد به نفس زیاد",
-  "خواب خوب",
-  "استرس مالی",
-  "فقط می‌خواستم ترید کنم",
-  "طبق پلن",
+const EMOTION_OPTIONS = [
+  { key: "fear", label: "ترس" },
+  { key: "calm", label: "آرام" },
+  { key: "greed", label: "طمع" },
+  { key: "fomo", label: "FOMO" },
+  { key: "revenge_trade", label: "انتقام" },
+  { key: "anger", label: "خشم" },
+  { key: "distracted", label: "عدم تمرکز" },
+  { key: "urge_to_trade", label: "میل به معامله" },
 ];
-const EMOTION_CHOICES = EMOTIONS.map((label) => ({ value: label, label }));
 
+const STATUS_OPTIONS = [
+  { key: "plan_followed", label: "طبق پلن" },
+  { key: "revenge_trade", label: "Revenge Trade" },
+  { key: "fomo", label: "FOMO" },
+  { key: "risk_mismanagement", label: "خارج از مدیریت ریسک" },
+  { key: "emotional_entry", label: "ورود احساسی" },
+  { key: "force_trade", label: "Force Trade" },
+  { key: "signal", label: "سیگنال" },
+];
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
 const normalizeDirection = (value) => {
   if (value === "short" || value === "sell") return "short";
   if (value === "buy" || value === "long") return "long";
-  return "long";
+  return "";
 };
 
 const parseEmotionSelections = (value) => {
@@ -81,11 +83,58 @@ const parseEmotionSelections = (value) => {
 
 const serializeEmotionSelections = (values) => values.filter(Boolean).join(", ");
 
-const getEmotionSelections = (trade) => {
-  if (!trade) return [];
-  if (Array.isArray(trade.emotionBefore)) return trade.emotionBefore.filter(Boolean);
-  if (typeof trade.emotionBefore === "string") return parseEmotionSelections(trade.emotionBefore);
-  return [];
+const extractNumericValue = (value) => {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (typeof value !== "string") return 0;
+
+  const normalized = value
+    .trim()
+    .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/,/g, ".");
+
+  const match = normalized.match(/-?\d+(\.\d+)?/);
+  if (!match) return 0;
+  const parsed = parseFloat(match[0]);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const getTradeOutcome = (trade) => {
+  const value = String(trade?.tradeResult || "").trim().toLowerCase();
+  if (value === "win") return "win";
+  if (value === "loss") return "loss";
+  if (value === "be") return "be";
+  return "";
+};
+
+const getTradeOutcomeLabel = (trade) => {
+  const outcome = getTradeOutcome(trade);
+  if (outcome === "win") return "Win";
+  if (outcome === "loss") return "Loss";
+  if (outcome === "be") return "Risk Free";
+  return "—";
+};
+
+const normalizeTradePercentInput = (value) => {
+  if (typeof value !== "string") return "";
+  const normalizedDigits = value
+    .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660));
+
+  const cleaned = normalizedDigits.replace(/[^0-9.,-]/g, "").replace(/,/g, ".");
+  const hasMinus = cleaned.includes("-");
+  const unsigned = cleaned.replace(/-/g, "");
+  const parts = unsigned.split(".");
+  const integerPart = parts.shift() || "";
+  const decimalPart = parts.join("");
+  const endsWithDot = cleaned.endsWith(".");
+  const merged = decimalPart ? `${integerPart}.${decimalPart}` : integerPart;
+
+  if (endsWithDot && !decimalPart) {
+    return `${hasMinus ? "-" : ""}${integerPart}.`;
+  }
+
+  return `${hasMinus ? "-" : ""}${merged}`;
 };
 
 const emptyTrade = () => ({
@@ -93,23 +142,15 @@ const emptyTrade = () => ({
   date: new Date().toISOString().slice(0, 10),
   time: new Date().toTimeString().slice(0, 5),
   symbol: "",
-  direction: "long",
-  style: "scalp",
+  direction: "",
+  style: "",
   leverage: "",
   volume: "",
-  takeProfit: "",
-  riskReward: "",
-  entryReason: "",
-  checklist: { mss: false, sweep: false, fvg: false, discount: false, divergence: false, trendline: false },
-  entryTrigger: "",
-  emotionBefore: "",
-  entrySignal: "",
-  marketExpectation: "",
-  whatHappened: "",
-  equityBefore: "",
-  equityAfter: "",
-  predictedProfitPercent: "",
-  result: "",
+  tradeResult: "",
+  tradePercent: "",
+  executionTags: [],
+  emotions: [],
+  statusOptions: [],
   mistake: "",
   lesson: "",
   mainTakeaway: "",
@@ -179,20 +220,42 @@ function LazyImage({ src, alt, style, onClick }) {
 
 function Field({ label, children, span }) {
   return (
-    <div style={{ gridColumn: span ? `span ${span}` : undefined }}>
-      <label style={{ display: "block", fontSize: 13, color: C.text, opacity: 0.85, marginBottom: 6 }}>{label}</label>
-      {children}
+    <div
+      style={{
+        gridColumn: span ? `span ${span}` : undefined,
+        border: `1.5px solid ${C.border}`,
+        borderRadius: 9,
+        overflow: "hidden",
+        minHeight: 70,
+        background: "#ffffff",
+      }}
+    >
+      <div
+        style={{
+          background: C.green,
+          color: "#ffffff",
+          textAlign: "center",
+          fontSize: 11,
+          fontWeight: 800,
+          padding: "8px 10px",
+          lineHeight: 1.2,
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ padding: 10 }}>{children}</div>
     </div>
   );
 }
 
 const inputStyle = {
   width: "100%",
-  background: C.surface2,
-  border: `1px solid ${C.border}`,
-  borderRadius: 8,
+  background: "#ffffff",
+  border: "none",
+  borderRadius: 0,
   padding: "9px 12px",
   color: C.text,
+  textAlign: "center",
   fontFamily: FONT_UI,
   fontSize: 15,
   outline: "none",
@@ -219,13 +282,9 @@ function SegButton({ options, value, onChange, allowEmpty = false }) {
       {options.map((o) => {
         const active = value === o.value;
         const accent = active
-          ? o.value === "long"
-            ? { bg: C.greenSoft, border: C.green, color: C.green }
-            : o.value === "short"
-              ? { bg: C.redSoft, border: C.red, color: C.red }
-              : o.value === "risk_free"
-                ? { bg: C.blue + "22", border: C.blue, color: C.blue }
-                : { bg: C.goldSoft, border: C.gold, color: C.gold }
+          ? o.value === "short"
+            ? { bg: C.red, border: C.red, color: "#ffffff" }
+            : { bg: C.green, border: C.green, color: "#ffffff" }
           : undefined;
         return (
           <button
@@ -242,12 +301,12 @@ function SegButton({ options, value, onChange, allowEmpty = false }) {
               flex: 1,
               minWidth: 100,
               padding: "8px 10px",
-              borderRadius: 8,
+              borderRadius: 9,
               fontSize: 14,
               fontFamily: FONT_UI,
-              border: `1px solid ${active ? accent?.border || C.gold : C.border}`,
-              background: active ? accent?.bg || C.goldSoft : C.surface2,
-              color: active ? accent?.color || C.gold : C.muted,
+              border: `1.5px solid ${active ? accent?.border || C.green : C.border}`,
+              background: active ? accent?.bg || C.green : "#ffffff",
+              color: active ? accent?.color || C.text : C.text,
               cursor: "pointer",
               transition: "all .15s",
             }}
@@ -264,10 +323,11 @@ function Card({ children, style }) {
   return (
     <div
       style={{
-        background: C.surface,
-        border: `1px solid ${C.border}`,
-        borderRadius: 14,
+        background: "#ffffff",
+        border: `1.5px solid ${C.border}`,
+        borderRadius: 11,
         padding: 18,
+        boxShadow: "0 10px 30px rgba(0, 0, 0, 0.04)",
         ...style,
       }}
     >
@@ -286,112 +346,9 @@ function KpiCard({ label, value, sub, accent }) {
   );
 }
 
-function ResultBadge({ result, fontSize = 11 }) {
-  const map = {
-    win: { c: C.green, bg: C.greenSoft, t: "سود" },
-    loss: { c: C.red, bg: C.redSoft, t: "ضرر" },
-    risk_free: { c: C.blue, bg: C.surface2, t: "ریسک فری" },
-  };
-  if (!result) return null;
-  const s = map[result] || map.risk_free;
-  return (
-    <span
-      style={{
-        background: s.bg,
-        color: s.c,
-        fontSize,
-        padding: "3px 9px",
-        borderRadius: 999,
-        fontFamily: FONT_UI,
-        whiteSpace: "nowrap",
-      }}
-    >
-      {s.t}
-    </span>
-  );
-}
-
 /* ---------------------------------------------------------------
    Stats helpers
 --------------------------------------------------------------- */
-function computeStats(trades) {
-  const n = (v) => (v === "" || v === undefined || v === null ? 0 : parseFloat(v));
-  const decisive = trades.filter((t) => t.result === "win" || t.result === "loss");
-  const wins = trades.filter((t) => t.result === "win");
-  const losses = trades.filter((t) => t.result === "loss");
-  const winRate = decisive.length ? (wins.length / decisive.length) * 100 : 0;
-
-  const rrVals = trades.map((t) => n(t.riskReward)).filter((v) => v > 0);
-  const avgRR = rrVals.length ? rrVals.reduce((a, b) => a + b, 0) / rrVals.length : 0;
-
-  const grossProfit = wins.reduce((a, t) => a + Math.abs(n(t.actualPnL)), 0);
-  const grossLoss = losses.reduce((a, t) => a + Math.abs(n(t.actualPnL)), 0);
-  const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0;
-
-  const now = new Date();
-  const monthCount = trades.filter((t) => {
-    const d = new Date(t.date);
-    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-  }).length;
-
-  const sorted = [...trades].sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
-  const lastEquity = sorted.length ? n(sorted[sorted.length - 1].equityAfter) : 0;
-
-  return { winRate, avgRR, profitFactor, monthCount, lastEquity, wins, losses, decisive };
-}
-
-function groupWinRate(trades, keyFn) {
-  const groups = {};
-  trades.forEach((t) => {
-    if (t.result !== "win" && t.result !== "loss") return;
-    const k = keyFn(t);
-    if (!k) return;
-    if (!groups[k]) groups[k] = { win: 0, total: 0 };
-    groups[k].total += 1;
-    if (t.result === "win") groups[k].win += 1;
-  });
-  return Object.entries(groups)
-    .map(([k, v]) => ({ label: k, rate: (v.win / v.total) * 100, total: v.total }))
-    .sort((a, b) => b.total - a.total);
-}
-
-function periodOfDay(time) {
-  if (!time) return null;
-  const h = parseInt(time.split(":")[0], 10);
-  if (h >= 5 && h < 12) return "صبح";
-  if (h >= 12 && h < 17) return "ظهر / عصر زود";
-  if (h >= 17 && h < 21) return "عصر / شب";
-  return "شب دیر / بامداد";
-}
-
-function buildInsights(trades) {
-  if (trades.length < 5) return ["برای تحلیل رفتاری حداقل ۵ معامله ثبت کن تا بینش‌های دقیق‌تری ببینی."];
-  const insights = [];
-  const decisive = trades.filter((t) => t.result === "win" || t.result === "loss");
-
-  const bySetup = groupWinRate(trades, (t) =>
-    CHECKLIST_ITEMS.filter((c) => t.checklist?.[c.key]).map((c) => c.label).join(" + ")
-  ).filter((g) => g.label);
-  if (bySetup.length) {
-    const best = bySetup[0];
-    insights.push(`ستاپ «${best.label || "بدون تریگر مشخص"}» با ${best.total} معامله، وین‌ریت ${best.rate.toFixed(0)}٪ داشته.`);
-  }
-
-  const byTime = groupWinRate(trades, (t) => periodOfDay(t.time));
-  if (byTime.length) {
-    const worst = [...byTime].sort((a, b) => a.rate - b.rate)[0];
-    insights.push(`بیشترین ضرر در بازه «${worst.label}» ثبت شده — وین‌ریت این بازه ${worst.rate.toFixed(0)}٪.`);
-  }
-
-  const noTrigger = decisive.filter((t) => !CHECKLIST_ITEMS.some((c) => t.checklist?.[c.key]));
-  if (noTrigger.length >= 3) {
-    const wr = (noTrigger.filter((t) => t.result === "win").length / noTrigger.length) * 100;
-    insights.push(`ورودهای بدون هیچ تریگر مشخص، فقط ${wr.toFixed(0)}٪ وین‌ریت داشتن.`);
-  }
-
-  return insights.length ? insights : ["الگوی مشخصی هنوز شناسایی نشده — به ثبت معاملات ادامه بده."];
-}
-
 /* ---------------------------------------------------------------
    Trade Form
 --------------------------------------------------------------- */
@@ -403,15 +360,23 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
   const uploadingRef = useRef({ entryImage: false, exitImage: false });
   const lastPickedRef = useRef({ entryImage: null, exitImage: null });
   const set = (k, v) => setT((p) => ({ ...p, [k]: v }));
-  const setChecklist = (k) => setT((p) => ({ ...p, checklist: { ...p.checklist, [k]: !p.checklist[k] } }));
-  const toggleEmotion = (value) => {
+
+  const toggleEmotionTag = (value) => {
     setT((p) => {
-      const current = parseEmotionSelections(p.emotionBefore);
+      const current = parseEmotionSelections(p.emotions);
       const next = current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
-      return { ...p, emotionBefore: serializeEmotionSelections(next) };
+      return { ...p, emotions: serializeEmotionSelections(next) };
     });
   };
-  const selectedEmotionValues = parseEmotionSelections(t.emotionBefore);
+  const toggleStatusOption = (value) => {
+    setT((p) => {
+      const current = parseEmotionSelections(p.statusOptions);
+      const next = current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
+      return { ...p, statusOptions: serializeEmotionSelections(next) };
+    });
+  };
+  const selectedEmotions = parseEmotionSelections(t.emotions);
+  const selectedStatusOptions = parseEmotionSelections(t.statusOptions);
 
   const MAX_IMAGE_BYTES = 2 * 1024 * 1024; // 2MB
 
@@ -423,19 +388,13 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Uploads the screenshot to the "trade-images" Storage bucket and stores
-  // the resulting public URL on the trade (not the raw file — a raw base64
-  // image is too large to keep directly in a database column).
+
   const makeImageHandler = (field) => async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    e.target.value = ""; // allow re-selecting the same file later
+    e.target.value = ""; 
 
-    // Some mobile browsers (notably iOS Safari) fire "change" twice for a
-    // single file pick. An in-flight guard alone isn't enough because the
-    // second event can arrive *after* the first upload already finished.
-    // So we also remember which exact file (name+size+timestamp) we just
-    // uploaded for this field and ignore an identical repeat for a bit.
+
     const signature = `${file.name}-${file.size}-${file.lastModified}`;
     const last = lastPickedRef.current[field];
     if (last && last.signature === signature && Date.now() - last.time < 4000) {
@@ -507,20 +466,24 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
     }
 
     setSubmitting(true);
-    onSave({ ...t, direction: normalizeDirection(t.direction), emotionBefore: serializeEmotionSelections(parseEmotionSelections(t.emotionBefore)) });
+    onSave({
+      ...t,
+      direction: normalizeDirection(t.direction),
+      executionTags: serializeEmotionSelections(parseEmotionSelections(t.executionTags)),
+      tradeResult: getTradeOutcome(t),
+      tradePercent: normalizeTradePercentInput(t.tradePercent),
+    });
   };
 
   const section = (title, children) => (
-    <div style={{ marginBottom: 36 }}>
-      <div style={{ fontSize: 13, color: C.gold, fontWeight: 600, marginBottom: 18 }}>{title}</div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 20 }}>
-        {children}
-      </div>
+    <div className="tm-section">
+      <div className="tm-section-title" style={{ color: C.gold }}>{title}</div>
+      <div className="tm-section-grid">{children}</div>
     </div>
   );
 
   return (
-    <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+    <form onSubmit={submit} className="tm-form">
       {section(
         "اطلاعات پایه",
         <>
@@ -530,23 +493,22 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
           <Field label="نماد">
             <TextInput placeholder="BTCUSDT" value={t.symbol} onChange={(e) => set("symbol", e.target.value)} />
           </Field>
-          <Field label="اهرم">
-            <TextInput placeholder="x10" value={t.leverage} onChange={(e) => set("leverage", e.target.value)} />
-          </Field>
-          <Field label="جهت">
+          <Field label="نوع / Type">
             <SegButton
               value={normalizeDirection(t.direction)}
               onChange={(v) => set("direction", v)}
+              allowEmpty
               options={[
                 { value: "long", label: "Long" },
                 { value: "short", label: "Short" },
               ]}
             />
           </Field>
-          <Field label="سبک معامله">
+          <Field label="Trade Mode / نوع معامله">
             <SegButton
               value={t.style}
               onChange={(v) => set("style", v)}
+              allowEmpty
               options={[
                 { value: "scalp", label: "Scalp" },
                 { value: "swing", label: "Swing" },
@@ -561,77 +523,59 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
         "جزئیات ورود",
         <>
           <Field label="حجم">
-            <TextInput type="text" inputMode="decimal" value={t.volume} onChange={(e) => set("volume", e.target.value)} />
+            <TextInput placeholder="مثلاً 0.5" type="text" inputMode="decimal" value={t.volume} onChange={(e) => set("volume", e.target.value)} />
           </Field>
-          <Field label="حد سود">
-            <TextInput type="text" inputMode="decimal" value={t.takeProfit} onChange={(e) => set("takeProfit", e.target.value)} />
+          <Field label="اهرم">
+            <TextInput placeholder="x10" value={t.leverage} onChange={(e) => set("leverage", e.target.value)} />
           </Field>
-          <Field label="نسبت ریسک به ریوارد (RR)">
-            <TextInput type="text" inputMode="decimal" placeholder="2.5" value={t.riskReward} onChange={(e) => set("riskReward", e.target.value)} />
-          </Field>
-        </>
-      )}
-
-      {section(
-        "تریگر و ذهنیت",
-        <>
-          <Field label="احساس قبل از ورود">
-            <div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {EMOTION_CHOICES.map((option) => {
-                  const checked = selectedEmotionValues.includes(option.label);
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => toggleEmotion(option.label)}
-                      style={{
-                        border: `1px solid ${checked ? C.gold : C.border}`,
-                        background: checked ? C.goldSoft : C.surface2,
-                        color: checked ? C.gold : C.muted,
-                        borderRadius: 999,
-                        padding: "7px 10px",
-                        cursor: "pointer",
-                        fontFamily: FONT_UI,
-                        fontSize: 13,
-                      }}
-                    >
-                      {option.label}
-                    </button>
-                  );
-                })}
-              </div>
-              <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {selectedEmotionValues.length ? (
-                  selectedEmotionValues.map((item) => (
-                    <span key={item} style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 999, padding: "6px 10px", color: C.text, fontSize: 12 }}>
-                      {item}
-                    </span>
-                  ))
-                ) : (
-                  <span style={{ color: C.faint, fontSize: 12 }}>هنوز هیچ گزینه‌ای انتخاب نشده.</span>
-                )}
-              </div>
-            </div>
-          </Field>
-          <Field label="ورود بر اساس سیگنال">
-            <SegButton
-              value={t.entrySignal}
-              onChange={(v) => set("entrySignal", v)}
-              allowEmpty
-              options={[
-                { value: "yes", label: "بله" },
-                { value: "no", label: "خیر" },
-              ]}
-            />
-          </Field>
+          
+          
         </>
       )}
 
       <div style={{ marginBottom: 36 }}>
-        <div style={{ fontSize: 13, color: C.gold, fontWeight: 600, marginBottom: 18 }}>تصویر قبل از ورود</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 20, alignItems: "start" }}>
-          <Field label="آپلود تصویر چارت یا ستاپ">
+        <Field label="وضعیت اجرا معامله">
+          <div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {STATUS_OPTIONS.map((option) => {
+                const checked = selectedStatusOptions.includes(option.key);
+                return (
+                  <button
+                    key={option.key}
+                    type="button"
+                    onClick={() => toggleStatusOption(option.key)}
+                    style={{
+                      border: `1px solid ${checked ? C.green : C.border}`,
+                      background: checked ? C.green : C.surface2,
+                      color: checked ? "#ffffff" : C.text,
+                      borderRadius: 999,
+                      padding: "7px 10px",
+                      cursor: "pointer",
+                      fontFamily: FONT_UI,
+                      fontSize: 13,
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {selectedStatusOptions.length ? (
+                selectedStatusOptions.map((item) => (
+                  <span key={item} style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 999, padding: "4px 8px", color: C.text, fontSize: 11 }}>
+                    {STATUS_OPTIONS.find((option) => option.key === item)?.label || item}
+                  </span>
+                ))
+              ) : (
+                <span style={{ color: C.faint, fontSize: 12 }}>هیچ موردی انتخاب نشده است.</span>
+              )}
+            </div>
+          </div>
+        </Field>
+        <div style={{ fontSize: 13, color: C.green, fontWeight: 600, marginTop: 36, marginBottom: 18 }}>تصویر قبل از معامله</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 20, alignItems: "start" }}>
+          <Field label="آپلود تصویر قبل از معامله">
             <input type="file" accept="image/*" onChange={onEntryImageChange} disabled={uploading.entryImage} style={{ ...inputStyle, padding: 8, color: C.text }} />
             {uploading.entryImage && <div style={{ fontSize: 12, color: C.gold, marginTop: 6 }}>در حال آپلود...</div>}
             {uploadError.entryImage && <div style={{ fontSize: 12, color: C.red, marginTop: 6 }}>{uploadError.entryImage}</div>}
@@ -654,28 +598,17 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
         </div>
       </div>
 
-      <div style={{ marginBottom: 36 }}>
-        <Field label="تریگر ورود">
-          <TextArea placeholder="مثلاً شکست ساختار + FVG" value={t.entryTrigger} onChange={(e) => set("entryTrigger", e.target.value)} />
-        </Field>
-      </div>
-
-      <div style={{ marginBottom: 36 }}>
-        <Field label="علت ورود به معامله">
-          <TextArea placeholder="علت ورودت را بنویس..." value={t.entryReason} onChange={(e) => set("entryReason", e.target.value)} />
-        </Field>
-      </div>
-
       {section(
         "تصویر بعد از معامله",
         <>
-          <Field label="آپلود تصویر بعد از معامله">
-            <input type="file" accept="image/*" onChange={onExitImageChange} disabled={uploading.exitImage} style={{ ...inputStyle, padding: 8, color: C.text }} />
-            {uploading.exitImage && <div style={{ fontSize: 12, color: C.gold, marginTop: 6 }}>در حال آپلود...</div>}
-            {uploadError.exitImage && <div style={{ fontSize: 12, color: C.red, marginTop: 6 }}>{uploadError.exitImage}</div>}
-          </Field>
-          {(previewUrl.exitImage || t.exitImage) ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 20 }}>
+            <Field label="آپلود تصویر بعد از معامله">
+              <input type="file" accept="image/*" onChange={onExitImageChange} disabled={uploading.exitImage} style={{ ...inputStyle, padding: 8, color: C.text }} />
+              {uploading.exitImage && <div style={{ fontSize: 12, color: C.gold, marginTop: 6 }}>در حال آپلود...</div>}
+              {uploadError.exitImage && <div style={{ fontSize: 12, color: C.red, marginTop: 6 }}>{uploadError.exitImage}</div>}
+            </Field>
+            {(previewUrl.exitImage || t.exitImage) ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <div style={{ fontSize: 12, color: C.text, opacity: 0.82 }}>پیش‌نمایش تصویر</div>
               <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", background: C.surface2, height: 200 }}>
                 <LazyImage src={previewUrl.exitImage || t.exitImage} alt="پیش‌نمایش بعد از معامله" style={{ width: "100%", height: "100%", display: "block", objectFit: "cover" }} />
@@ -689,46 +622,98 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
               می‌توانی تصویر بعد از معامله را اینجا آپلود کنی.
             </div>
           )}
+        </div>
         </>
       )}
 
       {section(
         "نتیجه معامله",
         <>
-          <Field label="دارایی قبل از معامله">
-            <TextInput type="text" inputMode="decimal" value={t.equityBefore} onChange={(e) => set("equityBefore", e.target.value)} />
+          {/* حالت اجرا (moved to image upload area) */}
+          <Field label="نتیجه معامله">
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {TRADE_RESULT_OPTIONS.map((option) => {
+                const checked = t.tradeResult === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => set("tradeResult", checked ? "" : option.value)}
+                    style={{
+                      border: `1px solid ${checked ? C.green : C.border}`,
+                      background: checked ? C.green : C.surface2,
+                      color: checked ? "#ffffff" : C.text,
+                      borderRadius: 999,
+                      padding: "9px 12px",
+                      cursor: "pointer",
+                      fontFamily: FONT_UI,
+                      fontSize: 13,
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
           </Field>
-          <Field label="دارایی بعد از معامله">
-            <TextInput type="text" inputMode="decimal" value={t.equityAfter} onChange={(e) => set("equityAfter", e.target.value)} />
-          </Field>
-          <Field label="نتیجه">
-            <SegButton
-              value={t.result}
-              onChange={(v) => set("result", v)}
-              allowEmpty
-              options={[
-                { value: "win", label: "سود" },
-                { value: "loss", label: "ضرر" },
-                { value: "risk_free", label: "ریسک فری" },
-              ]}
+          <Field label="سود / ضرر (%)">
+            <TextInput
+              type="text"
+              inputMode="decimal"
+              placeholder="مثلا +2.4 یا -1.2"
+              value={t.tradePercent}
+              onChange={(e) => set("tradePercent", normalizeTradePercentInput(e.target.value))}
             />
           </Field>
+          <Field label="احساس">
+            <div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {EMOTION_OPTIONS.map((option) => {
+                  const checked = selectedEmotions.includes(option.key);
+                  return (
+                    <button
+                      key={option.key}
+                      type="button"
+                      onClick={() => toggleEmotionTag(option.key)}
+                      style={{
+                        border: `1px solid ${checked ? C.green : C.border}`,
+                        background: checked ? C.green : C.surface2,
+                        color: checked ? "#ffffff" : C.text,
+                        borderRadius: 999,
+                        padding: "7px 10px",
+                        cursor: "pointer",
+                        fontFamily: FONT_UI,
+                        fontSize: 13,
+                      }}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {selectedEmotions.length ? (
+                  selectedEmotions.map((item) => (
+                    <span key={item} style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 999, padding: "4px 8px", color: C.text, fontSize: 11 }}>
+                      {EMOTION_OPTIONS.find((option) => option.key === item)?.label || item}
+                    </span>
+                  ))
+                ) : (
+                  <span style={{ color: C.faint, fontSize: 12 }}>هیچ احساسی انتخاب نشده است.</span>
+                )}
+              </div>
+            </div>
+          </Field>
+          
         </>
       )}
 
-      <div style={{ marginBottom: 36 }}>
-        <div style={{ fontSize: 13, color: C.gold, fontWeight: 600, marginBottom: 18 }}>مرور و درس‌ها</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 20 }}>
-          <Field label="اشتباه من">
-            <TextArea value={t.mistake} onChange={(e) => set("mistake", e.target.value)} />
-          </Field>
-          <Field label="درس معامله">
-            <TextArea value={t.lesson} onChange={(e) => set("lesson", e.target.value)} />
-          </Field>
-        </div>
-        <div style={{ height: 16 }} />
-        <Field label="معامله بر چه اساسی به تمام رسید؟">
-          <TextArea value={t.mainTakeaway} onChange={(e) => set("mainTakeaway", e.target.value)} />
+      <div style={{ marginBottom: 36, display: "grid", gap: 20 }}>
+        <Field label="اشتباه اصلی">
+          <TextArea dir="rtl" style={{ direction: "rtl", textAlign: "right" }} value={t.mistake} onChange={(e) => set("mistake", e.target.value)} />
+        </Field>
+        <Field label="بعد از معامله چه چیزی یاد گرفتی">
+          <TextArea dir="rtl" style={{ direction: "rtl", textAlign: "right" }} value={t.mainTakeaway} onChange={(e) => set("mainTakeaway", e.target.value)} />
         </Field>
       </div>
 
@@ -738,7 +723,7 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
           disabled={submitting}
           style={{
             background: C.gold,
-            color: "#1A1408",
+            color: "#ffffff",
             border: "none",
             borderRadius: 9,
             padding: "12px 28px",
@@ -749,7 +734,7 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
             opacity: submitting ? 0.6 : 1,
           }}
         >
-          {submitting ? "در حال ذخیره..." : "ذخیره معامله"}
+          {submitting ? "در حال ذخیره..." : "ثبت ژورنال"}
         </button>
         <button
           type="button"
@@ -775,10 +760,22 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
 /* ---------------------------------------------------------------
    History
 --------------------------------------------------------------- */
-function HistoryView({ trades, onEdit, onDelete }) {
+function HistoryView({ trades, onEdit }) {
   const [zoomImage, setZoomImage] = useState("");
   const [selectedTradeId, setSelectedTradeId] = useState(null);
-  const [historyFilter, setHistoryFilter] = useState("all");
+  const [historyRange, setHistoryRange] = useState("today");
+  const [historyPage, setHistoryPage] = useState(1);
+  const pageSize = 50;
+
+  const rangeOptions = [
+    { key: "today", label: "امروز" },
+    { key: "week", label: "این هفته" },
+    { key: "month", label: "این ماه" },
+  ];
+
+  const parseNumber = (value) => {
+    return extractNumericValue(value);
+  };
 
   const filteredTrades = useMemo(() => {
     const now = new Date();
@@ -786,28 +783,63 @@ function HistoryView({ trades, onEdit, onDelete }) {
     const startOfWeek = new Date(today);
     startOfWeek.setDate(today.getDate() - ((today.getDay() + 6) % 7));
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const startOfYear = new Date(now.getFullYear(), 0, 1);
 
     return [...trades].filter((trade) => {
       const tradeDate = new Date(trade.date);
       if (Number.isNaN(tradeDate.getTime())) return false;
 
-      switch (historyFilter) {
-        case "day":
+      switch (historyRange) {
+        case "today":
           return tradeDate >= today;
         case "week":
           return tradeDate >= startOfWeek;
         case "month":
           return tradeDate >= startOfMonth;
-        case "year":
-          return tradeDate >= startOfYear;
         default:
           return true;
       }
     });
-  }, [trades, historyFilter]);
+  }, [trades, historyRange]);
 
-  const sorted = [...filteredTrades].sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
+  const sorted = useMemo(
+    () => [...filteredTrades].sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time)),
+    [filteredTrades]
+  );
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
+  const pagedTrades = useMemo(() => {
+    const start = (historyPage - 1) * pageSize;
+    return sorted.slice(start, start + pageSize);
+  }, [sorted, historyPage]);
+
+  useEffect(() => {
+    if (!sorted.length) {
+      setSelectedTradeId(null);
+      setHistoryPage(1);
+      return;
+    }
+
+    if (selectedTradeId && !sorted.some((trade) => trade.id === selectedTradeId)) {
+      setSelectedTradeId(null);
+    }
+    if (historyPage > totalPages) {
+      setHistoryPage(totalPages);
+    }
+  }, [sorted, selectedTradeId, historyPage, totalPages]);
+
+  const stats = useMemo(() => {
+    const count = sorted.length;
+    const totalPnL = sorted.reduce((sum, trade) => sum + parseNumber(trade.tradePercent), 0);
+    const decisive = sorted.filter((trade) => {
+      const outcome = getTradeOutcome(trade);
+      return outcome === "win" || outcome === "loss";
+    });
+    const winCount = decisive.filter((trade) => getTradeOutcome(trade) === "win").length;
+    const winRate = decisive.length ? (winCount / decisive.length) * 100 : 0;
+    return { count, totalPnL, winRate };
+  }, [sorted]);
+
+  const selectedTrade = sorted.find((t) => t.id === selectedTradeId) || null;
 
   const DetailRow = ({ label, value }) => (
     <div style={{ display: "grid", gridTemplateColumns: "130px 1fr", gap: 8, padding: "7px 0", borderBottom: `1px dashed ${C.borderSoft}` }}>
@@ -816,169 +848,319 @@ function HistoryView({ trades, onEdit, onDelete }) {
     </div>
   );
 
-  if (!sorted.length) {
-    return (
-      <Card>
-        <div style={{ textAlign: "center", color: C.muted, padding: "30px 0" }}>هنوز معامله‌ای ثبت نشده.</div>
-      </Card>
-    );
-  }
+  const pageStart = sorted.length ? (historyPage - 1) * pageSize + 1 : 0;
+  const pageEnd = Math.min(historyPage * pageSize, sorted.length);
 
-  const selectedTrade = sorted.find((t) => t.id === selectedTradeId) || sorted[0];
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
-        <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.7 }}>
-          می‌توانی بازه زمانی معاملات را انتخاب کنی و آخرین معامله‌های همان بازه را ببینی.
-        </div>
-        <Select value={historyFilter} onChange={(e) => setHistoryFilter(e.target.value)} style={{ minWidth: 180 }}>
-          <option value="all">همه معاملات</option>
-          <option value="day">روز</option>
-          <option value="week">هفته</option>
-          <option value="month">ماه</option>
-          <option value="year">سال</option>
-        </Select>
+  const PaginationNav = () => (
+    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+      <div style={{ fontSize: 12, color: C.muted }}>
+        نمایش {sorted.length ? `${pageStart} تا ${pageEnd}` : "0"} از {sorted.length} ژورنال
       </div>
-
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-        {sorted.map((t) => {
-          const active = selectedTrade?.id === t.id;
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+        <button
+          type="button"
+          disabled={historyPage <= 1}
+          onClick={() => setHistoryPage((page) => Math.max(1, page - 1))}
+          style={{
+            border: `1px solid ${C.border}`,
+            background: historyPage <= 1 ? C.surface2 : C.surface,
+            color: historyPage <= 1 ? C.faint : C.text,
+            borderRadius: 9,
+            padding: "8px 12px",
+            cursor: historyPage <= 1 ? "default" : "pointer",
+            fontFamily: FONT_UI,
+            fontSize: 12,
+          }}
+        >
+          قبلی
+        </button>
+        {Array.from({ length: totalPages }, (_, index) => index + 1).map((page) => {
+          const active = page === historyPage;
           return (
             <button
-              key={t.id}
+              key={page}
               type="button"
-              onClick={() => setSelectedTradeId(t.id)}
+              onClick={() => setHistoryPage(page)}
               style={{
-                border: `1px solid ${active ? C.gold : C.border}`,
-                background: active ? C.goldSoft : C.surface2,
-                color: active ? C.gold : C.muted,
-                borderRadius: 999,
-                padding: "7px 10px",
+                minWidth: 36,
+                border: `1px solid ${active ? C.green : C.border}`,
+                background: active ? C.green : C.surface,
+                color: active ? "#ffffff" : C.text,
+                borderRadius: 9,
+                padding: "8px 10px",
                 cursor: "pointer",
                 fontFamily: FONT_UI,
                 fontSize: 12,
               }}
             >
-              {t.symbol || "معامله"} · {t.date}
+              {page}
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          disabled={historyPage >= totalPages}
+          onClick={() => setHistoryPage((page) => Math.min(totalPages, page + 1))}
+          style={{
+            border: `1px solid ${C.border}`,
+            background: historyPage >= totalPages ? C.surface2 : C.surface,
+            color: historyPage >= totalPages ? C.faint : C.text,
+            borderRadius: 9,
+            padding: "8px 12px",
+            cursor: historyPage >= totalPages ? "default" : "pointer",
+            fontFamily: FONT_UI,
+            fontSize: 12,
+          }}
+        >
+          بعدی
+        </button>
+      </div>
+    </div>
+  );
+
+  const labels = {
+    today: "امروز",
+    week: "این هفته",
+    month: "این ماه",
+  };
+  const closeModal = () => setSelectedTradeId(null);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+        {rangeOptions.map((option) => {
+          const active = historyRange === option.key;
+          return (
+            <button
+              key={option.key}
+              type="button"
+              onClick={() => setHistoryRange(active ? "" : option.key)}
+              style={{
+                border: `1.5px solid ${active ? C.green : C.border}`,
+                background: active ? C.green : C.surface2,
+                color: active ? "#ffffff" : C.text,
+                borderRadius: 999,
+                padding: "10px 16px",
+                cursor: "pointer",
+                fontFamily: FONT_UI,
+                fontSize: 13,
+                fontWeight: active ? 700 : 500,
+              }}
+            >
+              {option.label}
             </button>
           );
         })}
       </div>
 
-      {selectedTrade && (
-        <Card key={selectedTrade.id} style={{ padding: 14 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 200 }}>
-              <div
-                style={{
-                  width: 34,
-                  height: 34,
-                  borderRadius: 9,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  background: selectedTrade.direction === "long" ? C.greenSoft : C.redSoft,
-                  color: selectedTrade.direction === "long" ? C.green : C.red,
-                  flexShrink: 0,
-                }}
-              >
-                {selectedTrade.direction === "long" ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
-              </div>
-              <div>
-                <div style={{ fontFamily: FONT_MONO, fontSize: 18, color: C.text }}>{selectedTrade.symbol || "—"}</div>
-                <div style={{ fontSize: 14, color: C.faint }}>
-                  {selectedTrade.date} · {selectedTrade.time} · {selectedTrade.style === "scalp" ? "Scalp" : "Swing"}
-                </div>
-              </div>
-            </div>
-
-            <div style={{ fontFamily: FONT_MONO, fontSize: 16, color: C.muted, whiteSpace: "nowrap" }}>RR {selectedTrade.riskReward || "—"}</div>
-            <div style={{ fontFamily: FONT_MONO, fontSize: 16, color: C.muted, whiteSpace: "nowrap" }}>
-              {selectedTrade.actualPnL !== "" ? `${selectedTrade.actualPnL}$` : "—"}
-            </div>
-            <ResultBadge result={selectedTrade.result} fontSize={13} />
-
-            <div style={{ display: "flex", gap: 6 }}>
-              <button
-                onClick={() => onEdit(selectedTrade)}
-                style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.muted, borderRadius: 7, padding: "6px 10px", cursor: "pointer", fontFamily: FONT_UI, fontSize: 12 }}
-              >
-                ویرایش
-              </button>
-              <button
-                onClick={() => onDelete(selectedTrade.id)}
-                style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.red, borderRadius: 7, padding: "6px 8px", cursor: "pointer" }}
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
-          </div>
-
-          <div className="history-details-layout" style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr", gap: 12, alignItems: "start" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
-              {[
-                { src: selectedTrade.entryImage, label: "قبل از ورود" },
-                { src: selectedTrade.exitImage, label: "بعد از معامله" },
-              ].map((img, i) =>
-                img.src ? (
-                  <button
-                    key={i}
-                    type="button"
-                    onClick={() => setZoomImage(img.src)}
-                    title="نمایش تصویر در اندازه بزرگ"
-                    style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", background: C.surface2, padding: 0, width: "100%", height: 150, cursor: "zoom-in", position: "relative" }}
-                  >
-                    <LazyImage src={img.src} alt={`${selectedTrade.symbol || "trade"} - ${img.label}`} style={{ width: "100%", height: "100%", display: "block", objectFit: "cover" }} />
-                    <span style={{ position: "absolute", bottom: 6, right: 6, background: "rgba(11,14,20,0.75)", color: C.text, fontSize: 10, padding: "2px 8px", borderRadius: 999, zIndex: 1 }}>{img.label}</span>
-                  </button>
-                ) : (
-                  <div key={i} style={{ border: `1px dashed ${C.border}`, borderRadius: 12, padding: 14, color: C.muted, fontSize: 12, background: C.surface2 }}>
-                    تصویر «{img.label}» ثبت نشده.
-                  </div>
-                )
-              )}
-            </div>
-
-            <div style={{ border: `1px solid ${C.borderSoft}`, borderRadius: 12, padding: "8px 12px", background: C.surface2 }}>
-              <div style={{ fontSize: 12, color: C.gold, marginBottom: 6, fontWeight: 600 }}>جزئیات کامل معامله</div>
-              <DetailRow label="نماد" value={selectedTrade.symbol || "—"} />
-              <DetailRow label="تاریخ" value={selectedTrade.date || "—"} />
-              <DetailRow label="ساعت" value={selectedTrade.time || "—"} />
-              <DetailRow label="جهت" value={normalizeDirection(selectedTrade.direction) === "long" ? "Long" : "Short"} />
-              <DetailRow label="سبک" value={selectedTrade.style === "scalp" ? "Scalp" : "Swing"} />
-              <DetailRow label="اهرم" value={selectedTrade.leverage || "—"} />
-              <DetailRow label="حجم" value={selectedTrade.volume} />
-              <DetailRow label="حد سود" value={selectedTrade.takeProfit} />
-              <DetailRow label="RR" value={selectedTrade.riskReward} />
-              <DetailRow label="احساس قبل ورود" value={selectedTrade.emotionBefore} />
-              <DetailRow label="ورود بر اساس سیگنال" value={selectedTrade.entrySignal === "yes" ? "بله" : selectedTrade.entrySignal === "no" ? "خیر" : "—"} />
-              <DetailRow label="علت ورود" value={selectedTrade.entryReason} />
-              <DetailRow label="دارایی قبل" value={selectedTrade.equityBefore} />
-              <DetailRow label="دارایی بعد" value={selectedTrade.equityAfter} />
-              <DetailRow label="نتیجه" value={selectedTrade.result === "win" ? "سود" : selectedTrade.result === "loss" ? "ضرر" : selectedTrade.result === "risk_free" ? "ریسک فری" : "—"} />
-              <DetailRow label="اشتباه" value={selectedTrade.mistake} />
-              <DetailRow label="درس" value={selectedTrade.lesson} />
-              <DetailRow label="جمع‌بندی نهایی" value={selectedTrade.mainTakeaway} />
-              <div style={{ fontSize: 11, color: C.faint, marginTop: 8 }}>برای ویرایش هر کدام از موارد بالا از دکمه «ویرایش» استفاده کن.</div>
-            </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+        <Card style={{ padding: 14 }}>
+          <div style={{ fontSize: 12, color: C.faint, marginBottom: 8 }}>تعداد معاملات</div>
+          <div style={{ fontSize: 28, fontFamily: FONT_MONO, color: C.text, fontWeight: 700 }}>{stats.count}</div>
+        </Card>
+        <Card style={{ padding: 14 }}>
+          <div style={{ fontSize: 12, color: C.faint, marginBottom: 8 }}>سود / ضرر</div>
+          <div style={{ fontSize: 28, fontFamily: FONT_MONO, color: stats.totalPnL >= 0 ? C.green : C.red, fontWeight: 700 }}>
+            {stats.totalPnL >= 0 ? "+" : ""}{stats.totalPnL.toFixed(2)}
           </div>
         </Card>
-      )}
+        <Card style={{ padding: 14 }}>
+          <div style={{ fontSize: 12, color: C.faint, marginBottom: 8 }}>WIN RATE</div>
+          <div style={{ fontSize: 28, fontFamily: FONT_MONO, color: C.text, fontWeight: 700 }}>{stats.winRate.toFixed(0)}٪</div>
+        </Card>
+      </div>
 
-      {zoomImage && (
+      <PaginationNav />
+
+      <div style={{ overflowX: "auto", border: `1px solid ${C.border}`, borderRadius: 12, background: C.surface2 }}>
+        <table dir="ltr" style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
+          <thead>
+            <tr style={{ background: C.green, color: "#ffffff", textAlign: "left" }}>
+              <th style={{ padding: "12px 14px", fontSize: 12, textAlign: "left" }}>Date</th>
+              <th style={{ padding: "12px 14px", fontSize: 12, textAlign: "left" }}>Symbol</th>
+              <th style={{ padding: "12px 14px", fontSize: 12, textAlign: "left" }}>Type</th>
+              <th style={{ padding: "12px 14px", fontSize: 12, textAlign: "left" }}>Trade Mode</th>
+              <th style={{ padding: "12px 14px", fontSize: 12, textAlign: "left" }}>Result</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pagedTrades.length ? (
+              pagedTrades.map((trade) => {
+              const active = trade.id === selectedTradeId;
+              return (
+                <tr
+                  key={trade.id}
+                  onClick={() => setSelectedTradeId(trade.id)}
+                  style={{
+                    cursor: "pointer",
+                    background: active ? C.goldSoft : "transparent",
+                    color: C.text,
+                    borderBottom: `1px solid ${C.borderSoft}`,
+                  }}
+                >
+                  <td style={{ padding: "12px 14px", fontSize: 13, textAlign: "left", direction: "ltr" }}>{trade.date || "—"}</td>
+                  <td style={{ padding: "12px 14px", fontSize: 13, textAlign: "left", direction: "ltr" }}>{trade.symbol || "—"}</td>
+                  <td style={{ padding: "12px 14px", fontSize: 13, textAlign: "left", direction: "ltr" }}>{normalizeDirection(trade.direction) === "long" ? "Long" : trade.direction === "short" ? "Short" : "—"}</td>
+                  <td style={{ padding: "12px 14px", fontSize: 13, textAlign: "left", direction: "ltr" }}>{trade.style === "scalp" ? "Scalp" : trade.style === "swing" ? "Swing" : trade.style === "daytrade" ? "Daytrade" : "—"}</td>
+                  <td style={{ padding: "12px 14px", fontSize: 13, textAlign: "left", direction: "ltr" }}>{getTradeOutcomeLabel(trade)}</td>
+                </tr>
+              );
+              })
+            ) : (
+              <tr>
+                <td colSpan={5} style={{ padding: "24px 14px", textAlign: "center", color: C.muted, fontSize: 13, direction: "rtl" }}>
+                  معامله‌ای برای بازه «{labels[historyRange] || "انتخاب شده"}» ثبت نشده.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {selectedTrade && (
         <div
-          onClick={() => setZoomImage("")}
+          onClick={closeModal}
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(5, 8, 13, 0.88)",
-            zIndex: 1000,
+            zIndex: 1200,
+            background: "rgba(5, 8, 13, 0.72)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            padding: 18,
+            padding: 16,
           }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(920px, 100%)",
+              maxHeight: "92vh",
+              overflowY: "auto",
+              background: C.surface,
+              border: `1px solid ${C.border}`,
+              borderRadius: 16,
+              boxShadow: "0 24px 70px rgba(0,0,0,0.35)",
+              padding: 16,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 14 }}>
+              <div>
+                <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>{selectedTrade.symbol || "معامله"}</div>
+                <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>
+                  {selectedTrade.date || "—"} · {selectedTrade.time || "—"}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={closeModal}
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 10,
+                  border: `1px solid ${C.border}`,
+                  background: C.surface2,
+                  color: C.text,
+                  cursor: "pointer",
+                  flexShrink: 0,
+                }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ display: "grid", gap: 14 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
+                {[
+                  { src: selectedTrade.entryImage, label: "قبل از ورود" },
+                  { src: selectedTrade.exitImage, label: "بعد از معامله" },
+                ].map((img, i) =>
+                  img.src ? (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setZoomImage(img.src)}
+                      title="نمایش تصویر در اندازه بزرگ"
+                      style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", background: C.surface2, padding: 0, width: "100%", height: 150, cursor: "zoom-in", position: "relative" }}
+                    >
+                      <LazyImage src={img.src} alt={`${selectedTrade.symbol || "trade"} - ${img.label}`} style={{ width: "100%", height: "100%", display: "block", objectFit: "cover" }} />
+                            <span style={{ position: "absolute", bottom: 6, right: 6, background: "rgba(0,0,0,0.65)", color: "#ffffff", fontSize: 10, padding: "2px 8px", borderRadius: 999, zIndex: 1 }}>{img.label}</span>
+                    </button>
+                  ) : (
+                    <div key={i} style={{ border: `1px dashed ${C.border}`, borderRadius: 12, padding: 14, color: C.muted, fontSize: 12, background: C.surface2 }}>
+                      تصویر «{img.label}» ثبت نشده.
+                    </div>
+                  )
+                )}
+              </div>
+
+              <div style={{ border: `1px solid ${C.borderSoft}`, borderRadius: 12, padding: "8px 12px", background: C.surface2 }}>
+                <div style={{ fontSize: 12, color: C.gold, marginBottom: 6, fontWeight: 600 }}>جزئیات کامل معامله</div>
+                <DetailRow label="تاریخ" value={selectedTrade.date || "—"} />
+                <DetailRow label="ساعت" value={selectedTrade.time || "—"} />
+                <DetailRow label="جهت" value={normalizeDirection(selectedTrade.direction) === "long" ? "Long" : selectedTrade.direction === "short" ? "Short" : "—"} />
+                <DetailRow label="نوع" value={selectedTrade.style === "scalp" ? "Scalp" : selectedTrade.style === "swing" ? "Swing" : selectedTrade.style === "daytrade" ? "Daytrade" : "—"} />
+                <DetailRow label="اهرم" value={selectedTrade.leverage || "—"} />
+                <DetailRow label="حجم" value={selectedTrade.volume || "—"} />
+                <DetailRow label="سود / ضرر (%)" value={selectedTrade.tradePercent || "—"} />
+                {/* Old execution-tags detail removed (replaced by statusOptions) */}
+                <DetailRow
+                  label="احساس"
+                  value={parseEmotionSelections(selectedTrade.emotions)
+                    .map((item) => EMOTION_OPTIONS.find((opt) => opt.key === item)?.label || item)
+                    .join(" · ") || "—"}
+                />
+                <DetailRow
+                  label="وضعیت"
+                  value={parseEmotionSelections(selectedTrade.statusOptions)
+                    .map((item) => STATUS_OPTIONS.find((opt) => opt.key === item)?.label || item)
+                    .join(" · ") || "—"}
+                />
+                <DetailRow label="نتیجه" value={getTradeOutcomeLabel(selectedTrade)} />
+                <DetailRow label="اشتباه" value={selectedTrade.mistake} />
+                {/* `درس` removed per request */}
+                <DetailRow label="جمع‌بندی نهایی" value={selectedTrade.mainTakeaway} />
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  onClick={() => setSelectedTradeId(pagedTrades[Math.max(0, pagedTrades.findIndex((trade) => trade.id === selectedTrade.id) + 1)]?.id || selectedTrade.id)}
+                  style={{ background: C.surface2, color: C.text, border: `1px solid ${C.border}`, borderRadius: 9, padding: "10px 14px", cursor: "pointer", fontFamily: FONT_UI, fontSize: 13 }}
+                >
+                  معامله بعدی
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    closeModal();
+                    onEdit(selectedTrade);
+                  }}
+                  style={{ background: C.green, color: "#ffffff", border: "none", borderRadius: 9, padding: "10px 14px", cursor: "pointer", fontFamily: FONT_UI, fontSize: 13 }}
+                >
+                  ویرایش معامله
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {sorted.length > pageSize ? <PaginationNav /> : null}
+
+      {zoomImage && (
+        <div
+            onClick={() => setZoomImage("")}
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(5, 8, 13, 0.88)",
+              zIndex: 1300,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 18,
+            }}
         >
           <button
             type="button"
@@ -1023,53 +1205,6 @@ function HistoryView({ trades, onEdit, onDelete }) {
 }
 
 /* ---------------------------------------------------------------
-   Dashboard
---------------------------------------------------------------- */
-function Dashboard({ trades, onNewTrade }) {
-  const s = computeStats(trades);
-  const insights = useMemo(() => buildInsights(trades), [trades]);
-  return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 10 }}>
-        <div>
-          <div style={{ fontSize: "clamp(22px, 5vw, 26px)", fontFamily: FONT_TITLE, fontWeight: 400, color: C.text }}>داشبورد</div>
-          <div style={{ fontSize: 15, color: C.text, opacity: 0.78, marginTop: 2 }}>وضعیت کلی عملکرد معاملاتی تو</div>
-        </div>
-        <button
-          onClick={onNewTrade}
-          style={{ display: "flex", alignItems: "center", gap: 8, background: C.gold, color: "#1A1408", border: "none", borderRadius: 9, padding: "10px 18px", fontFamily: FONT_UI, fontWeight: 700, fontSize: 13, cursor: "pointer" }}
-        >
-          <PlusCircle size={16} />
-          ثبت معامله جدید
-        </button>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 16 }}>
-        <KpiCard label="موجودی حساب" value={`${s.lastEquity.toLocaleString("fa-IR")}$`} accent={C.gold} />
-        <KpiCard label="وین‌ریت" value={`${s.winRate.toFixed(0)}٪`} sub={`${s.wins.length} برد / ${s.losses.length} باخت`} accent={C.green} />
-        <KpiCard label="میانگین RR" value={s.avgRR.toFixed(2)} accent={C.blue} />
-        <KpiCard label="Profit Factor" value={s.profitFactor === Infinity ? "∞" : s.profitFactor.toFixed(2)} accent={C.gold} />
-        <KpiCard label="معاملات این ماه" value={s.monthCount} />
-      </div>
-
-      <Card>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-          <Sparkles size={16} color={C.gold} />
-          <div style={{ fontSize: 15, fontWeight: 600, color: C.text }}>تحلیل رفتاری</div>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {insights.map((line, i) => (
-            <div key={i} style={{ fontSize: 14, color: C.muted, lineHeight: 2, paddingRight: 14, borderRight: `2px solid ${C.gold}` }}>
-              {line}
-            </div>
-          ))}
-        </div>
-      </Card>
-    </div>
-  );
-}
-
-/* ---------------------------------------------------------------
    Stats page
 --------------------------------------------------------------- */
 function StatBar({ label, rate, total }) {
@@ -1089,40 +1224,194 @@ function StatBar({ label, rate, total }) {
 }
 
 function StatsView({ trades }) {
-  const bySetup = groupWinRate(trades, (t) => {
-    const tags = CHECKLIST_ITEMS.filter((c) => t.checklist?.[c.key]).map((c) => c.label);
-    return tags.length ? tags.join(" + ") : "بدون تریگر";
-  });
-  const byTime = groupWinRate(trades, (t) => periodOfDay(t.time));
-  const byDirection = groupWinRate(trades, (t) => (normalizeDirection(t.direction) === "long" ? "Long" : "Short"));
+  const [analysisRange, setAnalysisRange] = useState("");
 
-  if (!trades.length) {
-    return (
-      <Card>
-        <div style={{ textAlign: "center", color: C.muted, padding: "30px 0" }}>برای مشاهده آمار، اول چند معامله ثبت کن.</div>
-      </Card>
-    );
-  }
+  const rangeOptions = [
+    { key: "day", label: "روزانه" },
+    { key: "week", label: "هفتگی" },
+    { key: "month", label: "ماهانه" },
+  ];
+
+  const parseNumber = (value) => {
+    return extractNumericValue(value);
+  };
+
+  const filteredTrades = useMemo(() => {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfWeek = new Date(today);
+    startOfWeek.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    return [...trades].filter((trade) => {
+      const tradeDate = new Date(trade.date);
+      if (Number.isNaN(tradeDate.getTime())) return false;
+
+      switch (analysisRange) {
+        case "day":
+          return tradeDate >= today;
+        case "week":
+          return tradeDate >= startOfWeek;
+        case "month":
+          return tradeDate >= startOfMonth;
+        default:
+          return true;
+      }
+    });
+  }, [trades, analysisRange]);
+
+  const sortedTrades = useMemo(
+    () => [...filteredTrades].sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)),
+    [filteredTrades]
+  );
+
+  const stats = useMemo(() => {
+    const totalTrades = sortedTrades.length;
+    const decisiveTrades = sortedTrades.filter((trade) => {
+      const outcome = getTradeOutcome(trade);
+      return outcome === "win" || outcome === "loss";
+    });
+    const wins = decisiveTrades.filter((trade) => getTradeOutcome(trade) === "win").length;
+    const winRate = decisiveTrades.length ? (wins / decisiveTrades.length) * 100 : 0;
+
+    const accountStart = 100;
+    const accountEnd = sortedTrades.reduce((balance, trade) => {
+      const pct = parseNumber(trade.tradePercent);
+      return balance * (1 + pct / 100);
+    }, accountStart);
+    const equityDelta = accountEnd - accountStart;
+    const equityDeltaPercent = accountStart ? (equityDelta / accountStart) * 100 : 0;
+
+    return { totalTrades, winRate, equityDelta, equityDeltaPercent, accountStart, accountEnd };
+  }, [sortedTrades]);
+
+  const statusCards = STATUS_OPTIONS.map((option) => {
+    const count = sortedTrades.filter((trade) => parseEmotionSelections(trade.statusOptions).includes(option.key)).length;
+    return { ...option, count };
+  });
+
+  const recurringMistakes = useMemo(() => {
+    const normalizeText = (value) => {
+      if (typeof value !== "string") return "";
+      return value.trim().replace(/\s+/g, " ");
+    };
+
+    const pool = sortedTrades.flatMap((trade) => [
+      { source: "اشتباه اصلی", text: normalizeText(trade.mistake) },
+      { source: "چیزی که یاد گرفتی", text: normalizeText(trade.mainTakeaway) },
+    ]);
+
+    const counts = {};
+    pool.forEach((item) => {
+      if (!item.text || item.text.length < 4) return;
+      if (!counts[item.text]) counts[item.text] = { count: 0, sources: new Set() };
+      counts[item.text].count += 1;
+      counts[item.text].sources.add(item.source);
+    });
+
+    return Object.entries(counts)
+      .filter(([, value]) => value.count > 1)
+      .map(([text, value]) => ({ text, count: value.count, sources: [...value.sources] }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 6);
+  }, [sortedTrades]);
+
+  const finalAnalysisText = sortedTrades.length
+    ? "این بخش بر اساس داده‌های ژورنال در بازه انتخابی، الگوهای رفتاری و اشتباهات تکرارشونده را نشان می‌دهد."
+    : "برای مشاهده تحلیل نهایی، اول چند ژورنال ثبت کن.";
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+        {rangeOptions.map((option) => {
+          const active = analysisRange === option.key;
+          return (
+            <button
+              key={option.key}
+              type="button"
+              onClick={() => setAnalysisRange(active ? "" : option.key)}
+              style={{
+                border: `1.5px solid ${active ? C.green : C.border}`,
+                background: active ? C.green : C.surface2,
+                color: active ? "#ffffff" : C.text,
+                borderRadius: 999,
+                padding: "10px 16px",
+                cursor: "pointer",
+                fontFamily: FONT_UI,
+                fontSize: 13,
+                fontWeight: active ? 700 : 500,
+              }}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+        <Card style={{ padding: 14 }}>
+          <div style={{ fontSize: 12, color: C.faint, marginBottom: 8 }}>رشد / افت اکانت</div>
+          <div style={{ fontSize: 28, fontFamily: FONT_MONO, color: stats.equityDelta >= 0 ? C.green : C.red, fontWeight: 700 }}>
+            {stats.equityDelta >= 0 ? "+" : ""}{stats.equityDelta.toFixed(2)}
+          </div>
+          <div style={{ fontSize: 11, color: C.faint, marginTop: 6 }}>{stats.equityDeltaPercent.toFixed(1)}٪ نسبت به شروع بازه</div>
+        </Card>
+        <Card style={{ padding: 14 }}>
+          <div style={{ fontSize: 12, color: C.faint, marginBottom: 8 }}>کل معاملات</div>
+          <div style={{ fontSize: 28, fontFamily: FONT_MONO, color: C.text, fontWeight: 700 }}>{stats.totalTrades}</div>
+        </Card>
+        <Card style={{ padding: 14 }}>
+          <div style={{ fontSize: 12, color: C.faint, marginBottom: 8 }}>WIN RATE</div>
+          <div style={{ fontSize: 28, fontFamily: FONT_MONO, color: C.text, fontWeight: 700 }}>{stats.winRate.toFixed(0)}٪</div>
+        </Card>
+      </div>
+
       <Card>
-        <div style={{ fontSize: 13, fontWeight: 600, color: C.gold, marginBottom: 14 }}>عملکرد بر اساس ستاپ</div>
-        {bySetup.map((g) => (
-          <StatBar key={g.label} {...g} />
-        ))}
+        <div style={{ fontSize: 13, fontWeight: 600, color: C.gold, marginBottom: 14 }}>وضعیت اجرای معامله</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10 }}>
+          {statusCards.map((item) => (
+            <div
+              key={item.key}
+              style={{
+                border: `1px solid ${C.border}`,
+                borderRadius: 12,
+                background: C.surface2,
+                padding: 12,
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+              }}
+            >
+              <div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{item.label}</div>
+              <div style={{ fontSize: 24, fontFamily: FONT_MONO, color: C.text, fontWeight: 700 }}>{item.count}</div>
+            </div>
+          ))}
+        </div>
       </Card>
+
+      {/* Emotions removed from analysis view per request */}
+
       <Card>
-        <div style={{ fontSize: 13, fontWeight: 600, color: C.gold, marginBottom: 14 }}>عملکرد بر اساس زمان روز</div>
-        {byTime.map((g) => (
-          <StatBar key={g.label} {...g} />
-        ))}
-      </Card>
-      <Card>
-        <div style={{ fontSize: 13, fontWeight: 600, color: C.gold, marginBottom: 14 }}>عملکرد بر اساس جهت</div>
-        {byDirection.map((g) => (
-          <StatBar key={g.label} {...g} />
-        ))}
+        <div style={{ fontSize: 13, fontWeight: 600, color: C.gold, marginBottom: 10 }}>تحلیل نهایی از آمار</div>
+        <div style={{ color: C.muted, fontSize: 13, lineHeight: 2, marginBottom: 12 }}>{finalAnalysisText}</div>
+
+        <div style={{ border: `1px dashed ${C.border}`, borderRadius: 12, padding: 12, background: C.surface2, marginBottom: 12 }}>
+          <div style={{ fontSize: 12, color: C.text, fontWeight: 700, marginBottom: 8 }}>اشتباهات تکرارشونده من</div>
+          {recurringMistakes.length ? (
+            <div style={{ display: "grid", gap: 8 }}>
+              {recurringMistakes.map((item, index) => (
+                <div key={`${item.text}-${index}`} style={{ border: `1px solid ${C.borderSoft}`, borderRadius: 10, padding: "8px 10px", background: C.surface }}>
+                  <div style={{ color: C.text, fontSize: 12, lineHeight: 1.8, wordBreak: "break-word" }}>{item.text}</div>
+                  <div style={{ color: C.faint, fontSize: 11, marginTop: 4 }}>
+                    تکرار: {item.count} بار • منبع: {item.sources.join(" + ")}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ color: C.faint, fontSize: 12 }}>فعلا مورد تکرارشونده‌ای ثبت نشده است.</div>
+          )}
+        </div>
       </Card>
     </div>
   );
@@ -1187,13 +1476,13 @@ function LoginScreen() {
 
   return (
     <div dir="rtl" style={{ fontFamily: FONT_UI, background: C.bg, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Lalezar&family=Markazi+Text:wght@400..700&family=Rubik:ital,wght@0,300..900;1,300..900&family=Zain:ital,wght@0,200;0,300;0,400;0,700;0,800;0,900;1,300;1,400&display=swap');`}</style>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Lalezar&family=Rubik:ital,wght@0,300..900;1,300..900&family=Zain:ital,wght@0,200;0,300;0,400;0,700;0,800;0,900;1,300;1,400&display=swap');`}</style>
       <Card style={{ width: "100%", maxWidth: 380 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 22, justifyContent: "center" }}>
           <div style={{ width: 32, height: 32, borderRadius: 8, background: C.goldSoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <TrendingUp size={17} color={C.gold} />
           </div>
-          <div style={{ fontFamily: FONT_TITLE, fontSize: "clamp(30px, 7vw, 38px)", fontWeight: 400, color: "#FFFFFF", lineHeight: 1 }}>TradeMind</div>
+          <div style={{ fontFamily: FONT_TITLE, fontSize: "clamp(30px, 7vw, 38px)", fontWeight: 400, color: C.green, lineHeight: 1 }}>TradeMind</div>
         </div>
         <form onSubmit={submit}>
           <div style={{ marginBottom: 12 }}>
@@ -1230,16 +1519,15 @@ function LoginScreen() {
    Root App (signed-in journal)
 --------------------------------------------------------------- */
 const TABS = [
-  { key: "dashboard", label: "داشبورد", icon: LayoutDashboard },
-  { key: "new", label: "ثبت معامله", icon: PlusCircle },
+  { key: "new", label: "ثبت ژورنال جدید", icon: PlusCircle },
   { key: "history", label: "تاریخچه", icon: HistoryIcon },
-  { key: "stats", label: "آمار", icon: BarChart3 },
+  { key: "stats", label: "آنالیز", icon: BarChart3 },
 ];
 
 function Journal({ user }) {
   const [trades, setTrades] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState("dashboard");
+  const [tab, setTab] = useState("new");
   const [editing, setEditing] = useState(null);
   const [saveState, setSaveState] = useState("idle");
   const [saveError, setSaveError] = useState("");
@@ -1267,12 +1555,6 @@ function Journal({ user }) {
     }
   };
 
-  const normalizeChecklist = (value) => {
-    const base = { mss: false, sweep: false, fvg: false, discount: false, divergence: false, trendline: false };
-    if (!value || typeof value !== "object") return base;
-    return { ...base, ...value };
-  };
-
   const normalizeImageUrl = (value) => {
     if (typeof value !== "string") return "";
     const trimmed = value.trim();
@@ -1292,27 +1574,20 @@ function Journal({ user }) {
     date: normalizeTextValue(row.date) ?? "",
     time: normalizeTextValue(row.time) ?? "",
     symbol: normalizeTextValue(row.symbol) ?? "",
-    direction: normalizeDirection(row.direction || "long"),
-    style: normalizeTextValue(row.style) ?? "scalp",
+    direction: normalizeDirection(row.direction || ""),
+    style: normalizeTextValue(row.style) ?? "",
     leverage: normalizeTextValue(row.leverage) ?? "",
     volume: normalizeTextValue(row.volume) ?? "",
-    takeProfit: normalizeTextValue(row.take_profit) ?? normalizeTextValue(row.tp1) ?? "",
-    riskReward: normalizeTextValue(row.risk_reward) ?? "",
-    entryReason: normalizeTextValue(row.entry_reason) ?? "",
-    checklist: normalizeChecklist(row.checklist),
-    entryTrigger: normalizeTextValue(row.entry_trigger) ?? "",
-    emotionBefore: normalizeTextValue(row.emotion_before) ?? "",
-    entrySignal: row.entry_signal === null || row.entry_signal === undefined ? "" : row.entry_signal ? "yes" : "no",
-    marketExpectation: normalizeTextValue(row.market_expectation) ?? "",
-    whatHappened: normalizeTextValue(row.what_happened) ?? "",
-    equityBefore: normalizeTextValue(row.equity_before) ?? "",
-    equityAfter: normalizeTextValue(row.equity_after) ?? "",
-    predictedProfitPercent: normalizeTextValue(row.predicted_profit_percent) ?? "",
-    result: (() => {
-      const value = normalizeTextValue(row.result);
-      if (!value || value === "be") return "";
-      return value;
+    executionTags: parseEmotionSelections(normalizeTextValue(row.execution_tags) ?? ""),
+    emotions: parseEmotionSelections(normalizeTextValue(row.emotions) ?? ""),
+    statusOptions: parseEmotionSelections(normalizeTextValue(row.status_options) ?? ""),
+    tradeResult: (() => {
+      const value = normalizeTextValue(row.trade_result);
+      if (!value) return "";
+      const normalized = value.trim().toLowerCase();
+      return normalized === "win" || normalized === "loss" || normalized === "be" ? normalized : "";
     })(),
+    tradePercent: normalizeTextValue(row.trade_percent) ?? "",
     mistake: normalizeTextValue(row.mistake) ?? "",
     lesson: normalizeTextValue(row.lesson) ?? "",
     mainTakeaway: normalizeTextValue(row.main_takeaway) ?? "",
@@ -1326,22 +1601,14 @@ function Journal({ user }) {
     time: normalizeTextValue(trade.time),
     symbol: normalizeTextValue(trade.symbol),
     direction: normalizeDirection(trade.direction),
-    style: normalizeTextValue(trade.style) ?? "scalp",
+    style: normalizeTextValue(trade.style),
     leverage: normalizeTextValue(trade.leverage),
     volume: normalizeTextValue(trade.volume),
-    take_profit: normalizeTextValue(trade.takeProfit),
-    risk_reward: normalizeTextValue(trade.riskReward),
-    entry_reason: normalizeTextValue(trade.entryReason),
-    checklist: normalizeChecklist(trade.checklist),
-    entry_trigger: normalizeTextValue(trade.entryTrigger),
-    emotion_before: normalizeTextValue(trade.emotionBefore),
-    entry_signal: trade.entrySignal === "yes" ? true : trade.entrySignal === "no" ? false : null,
-    market_expectation: normalizeTextValue(trade.marketExpectation),
-    what_happened: normalizeTextValue(trade.whatHappened),
-    equity_before: normalizeTextValue(trade.equityBefore),
-    equity_after: normalizeTextValue(trade.equityAfter),
-    predicted_profit_percent: normalizeTextValue(trade.predictedProfitPercent),
-    result: normalizeTextValue(trade.result) || null,
+    trade_result: normalizeTextValue(trade.tradeResult),
+    trade_percent: normalizeTextValue(trade.tradePercent),
+    execution_tags: normalizeTextValue(serializeEmotionSelections(parseEmotionSelections(trade.executionTags))) || null,
+    emotions: normalizeTextValue(serializeEmotionSelections(parseEmotionSelections(trade.emotions))) || null,
+    status_options: normalizeTextValue(serializeEmotionSelections(parseEmotionSelections(trade.statusOptions))) || null,
     mistake: normalizeTextValue(trade.mistake),
     lesson: normalizeTextValue(trade.lesson),
     main_takeaway: normalizeTextValue(trade.mainTakeaway),
@@ -1396,6 +1663,7 @@ function Journal({ user }) {
 
     loadTrades();
   }, [storageKey, user.id]);
+
 
   const persist = async (trade) => {
     setSaveState("saving");
@@ -1478,7 +1746,7 @@ function Journal({ user }) {
   return (
     <div dir="rtl" style={{ fontFamily: FONT_UI, background: C.bg, minHeight: "100vh", color: C.text, paddingBottom: 76 }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Lalezar&family=Markazi+Text:wght@400..700&family=Rubik:ital,wght@0,300..900;1,300..900&family=Zain:ital,wght@0,200;0,300;0,400;0,700;0,800;0,900;1,300;1,400&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Lalezar&family=Rubik:ital,wght@0,300..900;1,300..900&family=Zain:ital,wght@0,200;0,300;0,400;0,700;0,800;0,900;1,300;1,400&display=swap');
         * { box-sizing: border-box; }
         input::placeholder, textarea::placeholder { color: ${C.faint}; }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -1572,9 +1840,9 @@ function Journal({ user }) {
                 gap: 7,
                 padding: "9px 16px",
                 borderRadius: 9,
-                border: `1px solid ${active ? C.gold : "transparent"}`,
-                background: active ? C.goldSoft : "transparent",
-                color: active ? C.gold : C.muted,
+                border: `1.5px solid ${C.border}`,
+                background: active ? C.green : "#ffffff",
+                color: active ? "#ffffff" : C.text,
                 fontFamily: FONT_UI,
                 fontSize: 13,
                 cursor: "pointer",
@@ -1590,12 +1858,10 @@ function Journal({ user }) {
       <div style={{ maxWidth: 1080, margin: "0 auto", padding: "24px 24px 48px" }}>
         {loading ? (
           <div style={{ textAlign: "center", padding: 60, color: C.muted }}>در حال بارگذاری...</div>
-        ) : tab === "dashboard" ? (
-          <Dashboard trades={trades} onNewTrade={startNew} />
         ) : tab === "history" ? (
           <>
             <div style={{ fontSize: "clamp(24px, 5vw, 28px)", fontFamily: FONT_TITLE, fontWeight: 400, marginBottom: 14 }}>تاریخچه معاملات</div>
-            <HistoryView trades={trades} onEdit={startEdit} onDelete={handleDelete} />
+            <HistoryView trades={trades} onEdit={startEdit} />
           </>
         ) : tab === "stats" ? (
           <>
@@ -1606,12 +1872,12 @@ function Journal({ user }) {
           <Card>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
               <div style={{ fontSize: "clamp(24px, 5vw, 28px)", fontFamily: FONT_TITLE, fontWeight: 400 }}>{editing?.symbol ? "ویرایش معامله" : "ثبت معامله جدید"}</div>
-              <button onClick={() => setTab("dashboard")} style={{ background: "transparent", border: "none", color: C.muted, cursor: "pointer" }}>
-                <X size={18} />
-              </button>
-            </div>
-            <TradeForm initial={editing} onSave={handleSave} onCancel={() => setTab("dashboard")} userId={user.id} onNotify={(type, text) => setToast({ type, text })} />
-          </Card>
+              <button onClick={() => setTab("history")} style={{ background: "transparent", border: "none", color: C.muted, cursor: "pointer" }}>
+              <X size={18} />
+            </button>
+          </div>
+          <TradeForm initial={editing} onSave={handleSave} onCancel={() => setTab("history")} userId={user.id} onNotify={(type, text) => setToast({ type, text })} />
+        </Card>
         ) : null}
       </div>
 
@@ -1623,7 +1889,7 @@ function Journal({ user }) {
             <button
               key={tItem.key}
               onClick={() => (tItem.key === "new" ? startNew() : setTab(tItem.key))}
-              style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "6px 0", background: "transparent", border: "none", color: active ? C.gold : C.faint, cursor: "pointer" }}
+              style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "6px 0", background: active ? C.green : "#ffffff", border: `1.5px solid ${C.border}`, color: active ? "#ffffff" : C.text, cursor: "pointer" }}
             >
               <Icon size={18} />
               <span style={{ fontSize: 10, fontFamily: FONT_UI }}>{tItem.label}</span>
