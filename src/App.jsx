@@ -151,6 +151,7 @@ const emptyTrade = () => ({
   executionTags: [],
   emotions: [],
   statusOptions: [],
+  entryReason: "",
   mistake: "",
   lesson: "",
   mainTakeaway: "",
@@ -534,6 +535,17 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
       )}
 
       <div style={{ marginBottom: 36 }}>
+        <div style={{ marginBottom: "clamp(18px, 3.2vw, 32px)" }}>
+          <Field label="علت ورود به معامله">
+            <TextArea
+              dir="rtl"
+              style={{ direction: "rtl", textAlign: "right", minHeight: 92 }}
+              value={t.entryReason}
+              onChange={(e) => set("entryReason", e.target.value)}
+              placeholder="مثلاً: ورود بر اساس تایید سیگنال، فشار بازار، یا شکست پلن"
+            />
+          </Field>
+        </div>
         <Field label="وضعیت اجرا معامله">
           <div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
@@ -1116,6 +1128,7 @@ function HistoryView({ trades, onEdit }) {
                     .map((item) => STATUS_OPTIONS.find((opt) => opt.key === item)?.label || item)
                     .join(" · ") || "—"}
                 />
+                <DetailRow label="علت ورود به معامله" value={selectedTrade.entryReason || "—"} />
                 <DetailRow label="نتیجه" value={getTradeOutcomeLabel(selectedTrade)} />
                 <DetailRow label="اشتباه" value={selectedTrade.mistake} />
                 {/* `درس` removed per request */}
@@ -1581,6 +1594,7 @@ function Journal({ user }) {
     executionTags: parseEmotionSelections(normalizeTextValue(row.execution_tags) ?? ""),
     emotions: parseEmotionSelections(normalizeTextValue(row.emotions) ?? ""),
     statusOptions: parseEmotionSelections(normalizeTextValue(row.status_options) ?? ""),
+    entryReason: normalizeTextValue(row.entry_reason) ?? "",
     tradeResult: (() => {
       const value = normalizeTextValue(row.trade_result);
       if (!value) return "";
@@ -1609,6 +1623,7 @@ function Journal({ user }) {
     execution_tags: normalizeTextValue(serializeEmotionSelections(parseEmotionSelections(trade.executionTags))) || null,
     emotions: normalizeTextValue(serializeEmotionSelections(parseEmotionSelections(trade.emotions))) || null,
     status_options: normalizeTextValue(serializeEmotionSelections(parseEmotionSelections(trade.statusOptions))) || null,
+    entry_reason: normalizeTextValue(trade.entryReason),
     mistake: normalizeTextValue(trade.mistake),
     lesson: normalizeTextValue(trade.lesson),
     main_takeaway: normalizeTextValue(trade.mainTakeaway),
@@ -1755,8 +1770,6 @@ function Journal({ user }) {
         @media (min-width: 900px) {
           .history-details-layout { grid-template-columns: minmax(0, 280px) 1fr; }
         }
-        @media (min-width: 768px) { .mobile-nav { display: none; } }
-        @media (max-width: 767px) { .desktop-nav { display: none; } }
       `}</style>
 
       <div style={{ borderBottom: `1px solid ${C.borderSoft}`, padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -1826,7 +1839,7 @@ function Journal({ user }) {
         </div>
       ) : null}
 
-      <div style={{ display: "flex", gap: 8, padding: "16px 20px 0" }} className="desktop-nav">
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "16px 20px 0", alignItems: "center" }}>
         {TABS.map((tItem) => {
           const Icon = tItem.icon;
           const active = tab === tItem.key || (tab === "new" && tItem.key === "new");
@@ -1881,22 +1894,6 @@ function Journal({ user }) {
         ) : null}
       </div>
 
-      <div className="mobile-nav" style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: C.surface, borderTop: `1px solid ${C.border}`, display: "flex", padding: "8px 6px" }}>
-        {TABS.map((tItem) => {
-          const Icon = tItem.icon;
-          const active = tab === tItem.key || (tab === "new" && tItem.key === "new");
-          return (
-            <button
-              key={tItem.key}
-              onClick={() => (tItem.key === "new" ? startNew() : setTab(tItem.key))}
-              style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "6px 0", background: active ? C.green : "#ffffff", border: `1.5px solid ${C.border}`, color: active ? "#ffffff" : C.text, cursor: "pointer" }}
-            >
-              <Icon size={18} />
-              <span style={{ fontSize: 10, fontFamily: FONT_UI }}>{tItem.label}</span>
-            </button>
-          );
-        })}
-      </div>
     </div>
   );
 }
