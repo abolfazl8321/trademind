@@ -772,7 +772,7 @@ function TradeForm({ initial, onSave, onCancel, userId, onNotify }) {
 /* ---------------------------------------------------------------
    History
 --------------------------------------------------------------- */
-function HistoryView({ trades, onEdit }) {
+function HistoryView({ trades, onEdit, onDelete }) {
   const [zoomImage, setZoomImage] = useState("");
   const [selectedTradeId, setSelectedTradeId] = useState(null);
   const [historyRange, setHistoryRange] = useState("today");
@@ -1152,6 +1152,18 @@ function HistoryView({ trades, onEdit }) {
                   style={{ background: C.green, color: "#ffffff", border: "none", borderRadius: 9, padding: "10px 14px", cursor: "pointer", fontFamily: FONT_UI, fontSize: 13 }}
                 >
                   ویرایش معامله
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const confirmed = window.confirm("آیا مطمئن هستید که می‌خواهید این ژورنال را حذف کنید؟ این عملیات قابل بازگشت نیست.");
+                    if (!confirmed) return;
+                    await onDelete(selectedTrade.id);
+                    closeModal();
+                  }}
+                  style={{ background: C.red, color: "#ffffff", border: "none", borderRadius: 9, padding: "10px 14px", cursor: "pointer", fontFamily: FONT_UI, fontSize: 13 }}
+                >
+                  حذف ژورنال
                 </button>
               </div>
             </div>
@@ -1736,8 +1748,20 @@ function Journal({ user }) {
   const handleDelete = async (id) => {
     const targetTrade = trades.find((t) => t.id === id);
 
+    if (!targetTrade) return;
+
     if (targetTrade?.dbId && supabase) {
       try {
+        const deleteStorageFile = async (imageUrl) => {
+          if (!imageUrl || typeof imageUrl !== "string") return;
+          const match = imageUrl.match(/\/storage\/object\/public\/trade-images\/(.+)$/);
+          if (!match) return;
+          const path = decodeURIComponent(match[1]);
+          await supabase.storage.from("trade-images").remove([path]);
+        };
+
+        await deleteStorageFile(targetTrade.entryImage);
+        await deleteStorageFile(targetTrade.exitImage);
         await supabase.from("trades").delete().eq("id", targetTrade.dbId);
       } catch (error) {
         console.error("Delete failed:", error);
@@ -1874,7 +1898,7 @@ function Journal({ user }) {
         ) : tab === "history" ? (
           <>
             <div style={{ fontSize: "clamp(24px, 5vw, 28px)", fontFamily: FONT_TITLE, fontWeight: 400, marginBottom: 14 }}>تاریخچه معاملات</div>
-            <HistoryView trades={trades} onEdit={startEdit} />
+            <HistoryView trades={trades} onEdit={startEdit} onDelete={handleDelete} />
           </>
         ) : tab === "stats" ? (
           <>
