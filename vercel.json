@@ -1,0 +1,15 @@
+{
+  "framework": "vite",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "functions": {
+    "api/*.js": {
+      "runtime": "nodejs20.x"
+    }
+  },
+  "rewrites": [
+    { "source": "/api/kline",  "destination": "/api/kline" },
+    { "source": "/api/ticker", "destination": "/api/ticker" },
+    { "source": "/(.*)",       "destination": "/index.html" }
+  ]
+}

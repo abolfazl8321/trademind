@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   PlusCircle,
   History as HistoryIcon,
@@ -10,8 +10,11 @@ import {
   Sparkles,
   Loader2,
   LogOut,
+  ArrowRight,
 } from "lucide-react";
 import { supabase, supabaseConfigStatus } from "./supabase.js";
+import Dashboard from "./Dashboard.jsx";
+import AIAnalysis from "./AIAnalysis.jsx";
 
 /* ---------------------------------------------------------------
    Design tokens — dark trading-terminal palette
@@ -1549,7 +1552,7 @@ const TABS = [
   { key: "stats", label: "آنالیز", icon: BarChart3 },
 ];
 
-function Journal({ user }) {
+function Journal({ user, onBack }) {
   const [trades, setTrades] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState("new");
@@ -1798,6 +1801,27 @@ function Journal({ user }) {
 
       <div style={{ borderBottom: `1px solid ${C.borderSoft}`, padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {onBack && (
+            <button
+              onClick={onBack}
+              style={{
+                background: C.surface2,
+                border: `1px solid ${C.border}`,
+                borderRadius: 8,
+                width: 36,
+                height: 36,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+                color: C.text,
+                flexShrink: 0,
+              }}
+              title="بازگشت به داشبورد"
+            >
+              <ArrowRight size={17} />
+            </button>
+          )}
           <div style={{ width: 30, height: 30, borderRadius: 8, background: C.goldSoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <TrendingUp size={16} color={C.gold} />
           </div>
@@ -1924,6 +1948,7 @@ function Journal({ user }) {
 
 export default function App() {
   const [user, setUser] = useState(undefined); // undefined = checking, null = signed out
+  const [section, setSection] = useState("dashboard"); // dashboard | journal | ai
 
   useEffect(() => {
     if (!supabase) {
@@ -1939,6 +1964,7 @@ export default function App() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
+      if (!session?.user) setSection("dashboard");
     });
 
     return () => subscription.unsubscribe();
@@ -1952,5 +1978,7 @@ export default function App() {
     );
   }
   if (!user) return <LoginScreen />;
-  return <Journal user={user} />;
+  if (section === "journal") return <Journal user={user} onBack={() => setSection("dashboard")} />;
+  if (section === "ai") return <AIAnalysis user={user} onBack={() => setSection("dashboard")} />;
+  return <Dashboard onNavigate={setSection} user={user} />;
 }
