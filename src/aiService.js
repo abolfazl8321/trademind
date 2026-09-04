@@ -109,13 +109,12 @@ export const TOP_SYMBOLS = [
 ];
 
 function fetchLimitFor(interval) {
-  const shortTFs = ["1m", "3m", "5m", "15m"];
-  return shortTFs.includes(interval) ? 100 : 70;
+  const shortTFs = ["1m", "3m", "5m", "15m", "30m"];
+  return shortTFs.includes(interval) ? 70 : 100;
 }
 
 function promptSliceFor(interval) {
-  const shortTFs = ["1m", "3m", "5m", "15m"];
-  return shortTFs.includes(interval) ? 40 : 70;
+  return fetchLimitFor(interval); // Feed all fetched candles to the AI
 }
 
 /* ------------------------------------------------------------------
@@ -192,7 +191,7 @@ export async function fetchTrueTradeTopCandidates() {
 /* ------------------------------------------------------------------
    ساخت پرامپت بهینه برای Gemini
 ------------------------------------------------------------------ */
-function buildPrompt(symbol, timeframe, klines) {
+function buildPrompt(symbol, timeframe, klines, useFibonacci) {
   const sliceCount = promptSliceFor(timeframe);
   const recent = klines.slice(-sliceCount);
   const current = recent[recent.length - 1];
@@ -204,7 +203,11 @@ function buildPrompt(symbol, timeframe, klines) {
     .map((k) => `${k.time}|O:${k.open}|H:${k.high}|L:${k.low}|C:${k.close}|V:${Math.round(k.volume)}`)
     .join("\n");
 
-  return `You are a professional crypto technical analyst. Analyze ${symbol} on ${timeframe} timeframe.
+  const fibInstruction = useFibonacci 
+    ? `\n- Calculate key Fibonacci retracement/extension levels and include them in the "fibLevels" array.` 
+    : `\n- "fibLevels" MUST be an empty array [].`;
+
+  return `You are a professional, highly experienced crypto technical analyst. Analyze ${symbol} on ${timeframe} timeframe.
 This analysis is strictly for educational purposes and simulated environments, NOT financial advice.
 
 MARKET DATA (last ${recent.length} candles):
@@ -212,10 +215,31 @@ Price:${current.close} | High:${high} | Low:${low} | AvgVol:${Math.round(avgVol)
 
 ${candleLines}
 
-Respond ONLY with a valid JSON object. Do NOT include any markdown formatting, code fences, or extra text.
-All number fields MUST be numeric values (not strings). The "analysis" field must be a single-line string with NO newline characters.
+Analyze the data with EXTREME precision based on these advanced concepts:
+1. Technical Analysis & Trend Direction (جهت روند)
+2. Important Liquidity Zones (نواحی مهم نقدینگی)
+3. PRZ (Potential Reversal Zones - نواحی پی آر زد)
+4. Chart Patterns & Formations (الگوها و پترن‌ها)
+5. Pure Price Action Analysis (تحلیل پرایس اکشن)
+6. Key Level Breakouts and Retests (شکست ناحیه مهم و ریتست)
+7. Candlestick Confirmations for the Signal (تاییدیه کندلی برای سیگنال)
+${fibInstruction}
 
-{"trend":"BULLISH or BEARISH or SIDEWAYS","signal":"BUY or SELL or NEUTRAL","confidence":70,"entry":0.0,"stopLoss":0.0,"target1":0.0,"target2":0.0,"riskReward":"1:2","analysis":"تحلیل کامل تکنیکال به فارسی شامل روند، حمایت و مقاومت، الگوی کندل، حجم معاملات و دلیل سیگنال را در یک پاراگراف بنویس."}`;
+Respond ONLY with a valid JSON object. Do NOT include any markdown formatting, code fences, or extra text.
+All number fields MUST be numeric values (not strings).
+
+{
+  "trend": "BULLISH or BEARISH or SIDEWAYS",
+  "signal": "BUY or SELL or NEUTRAL",
+  "confidence": 85,
+  "entry": 0.0,
+  "stopLoss": 0.0,
+  "target1": 0.0,
+  "target2": 0.0,
+  "riskReward": "1:2",
+  "fibLevels": [ {"level": "0.618", "price": 0.0} ],
+  "analysis": "متن دقیق، حرفه‌ای و کامل تحلیل به زبان فارسی شامل موارد بالا (پرایس اکشن، نقدینگی، تاییدیه کندلی و غیره). متن یکپارچه بدون کاراکترهای خط جدید (Newline) باشد."
+}`;
 }
 
 /* ------------------------------------------------------------------
@@ -260,6 +284,7 @@ function parseAIResponse(rawText) {
       target1: typeof parsed.target1 === "number" ? parsed.target1 : 0,
       target2: typeof parsed.target2 === "number" ? parsed.target2 : 0,
       riskReward: parsed.riskReward || "—",
+      fibLevels: Array.isArray(parsed.fibLevels) ? parsed.fibLevels : [],
       analysis: typeof parsed.analysis === "string" ? parsed.analysis : "تحلیلی ارائه نشد.",
     };
   } catch (err) {
@@ -306,7 +331,7 @@ async function callGeminiViaProxy(model, prompt) {
 /* ------------------------------------------------------------------
    تحلیل یک ارز با Gemini 
 ------------------------------------------------------------------ */
-export async function analyzeSymbol(symbol, timeframe = "1h") {
+export async function analyzeSymbol(symbol, timeframe = "1h", useFibonacci = false) {
   const rateCheck = checkRateLimit();
   if (!rateCheck.allowed) {
     throw new Error(rateCheck.message);
@@ -314,7 +339,7 @@ export async function analyzeSymbol(symbol, timeframe = "1h") {
 
   const limit = fetchLimitFor(timeframe);
   const klines = await fetchHistoricalKlines(symbol, timeframe, limit);
-  const prompt = buildPrompt(symbol, timeframe, klines);
+  const prompt = buildPrompt(symbol, timeframe, klines, useFibonacci);
 
   recordRequest();
 
@@ -335,7 +360,8 @@ export async function analyzeSymbol(symbol, timeframe = "1h") {
     }
 
     try {
-      return parseAIResponse(result.text);
+      const parsed = parseAIResponse(result.text);
+      return { ...parsed, klines };
     } catch (parseErr) {
       lastError = parseErr.message;
       console.warn(`Model ${model} parse failed:`, lastError);
@@ -346,49 +372,4 @@ export async function analyzeSymbol(symbol, timeframe = "1h") {
   throw new Error(lastError || "خطا در ارتباط با سرور هوش مصنوعی — لطفاً دوباره تلاش کن");
 }
 
-/* ------------------------------------------------------------------
-   سیگنال‌های خودکار: ۳ ارز برتر THE TRUE TRADE تحلیل می‌شوند
------------------------------------------------------------------- */
-export async function fetchAutoSignals() {
-  const rateCheck = checkRateLimit();
-  if (!rateCheck.allowed) {
-    throw new Error(rateCheck.message);
-  }
-  if (rateCheck.remaining < 3) {
-    throw new Error(
-      `⚠️ ظرفیت فعلی توکن‌ها فقط اجازه ${rateCheck.remaining} تحلیل می‌دهد، ولی سیگنال خودکار نیاز به ۳ تحلیل دارد.\nلطفاً حدود ۱ دقیقه صبر کنید تا ظرفیت کامل شارژ شود.`
-    );
-  }
 
-  const candidates = await fetchTrueTradeTopCandidates();
-  const top3 = candidates.slice(0, 3);
-
-  const results = [];
-  for (const c of top3) {
-    try {
-      const analysis = await analyzeSymbol(c.symbol, "1h");
-      results.push({
-        symbol: c.symbol,
-        price: c.price,
-        priceChange: c.priceChange,
-        volume: c.volume,
-        ...analysis,
-        error: null,
-      });
-    } catch (err) {
-      results.push({
-        symbol: c.symbol,
-        price: c.price,
-        priceChange: c.priceChange,
-        volume: c.volume,
-        error: err.message,
-      });
-    }
-
-    if (top3.indexOf(c) < top3.length - 1) {
-      await new Promise((r) => setTimeout(r, 2000));
-    }
-  }
-
-  return results;
-}

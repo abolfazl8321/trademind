@@ -21,7 +21,7 @@ import {
   TIMEFRAME_OPTIONS,
   TOP_SYMBOLS,
   analyzeSymbol,
-  fetchAutoSignals,
+  fetchTrueTradeTopCandidates,
   checkRateLimit,
 } from "./aiService.js";
 
@@ -169,6 +169,100 @@ function PriceLevel({ label, value, color, icon }) {
   );
 }
 
+function AIChart({ klines, entry, target1, target2, stopLoss, fibLevels }) {
+  const canvasRef = React.useRef(null);
+  
+  React.useEffect(() => {
+    if (!klines || klines.length === 0 || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    
+    // پیدا کردن بازه قیمت‌ها
+    const prices = klines.map(k => [k.low, k.high]).flat();
+    const minPrice = Math.min(...prices);
+    const maxPrice = Math.max(...prices);
+    const padding = (maxPrice - minPrice) * 0.1 || 1;
+    const minP = minPrice - padding;
+    const maxP = maxPrice + padding;
+    const rng = maxP - minP;
+    
+    const getY = (price) => h - ((price - minP) / rng) * h;
+    const getX = (index) => (w / klines.length) * (index + 0.5);
+    const cw = (w / klines.length) * 0.6;
+    
+    // رسم کندل‌ها
+    klines.forEach((k, i) => {
+      const x = getX(i);
+      const isUp = k.close >= k.open;
+      ctx.strokeStyle = isUp ? '#22c55e' : '#ef4444';
+      ctx.fillStyle = isUp ? '#22c55e' : '#ef4444';
+      ctx.lineWidth = 1.5;
+      
+      // Shadow (wick)
+      ctx.beginPath();
+      ctx.moveTo(x, getY(k.high));
+      ctx.lineTo(x, getY(k.low));
+      ctx.stroke();
+      
+      // Body
+      const y1 = getY(k.open);
+      const y2 = getY(k.close);
+      const bodyH = Math.max(Math.abs(y1 - y2), 1);
+      ctx.fillRect(x - cw/2, Math.min(y1, y2), cw, bodyH);
+    });
+    
+    // تابع رسم خطوط تحلیلی
+    const drawLine = (y, color, label) => {
+      if (y < 0 || y > h) return;
+      ctx.strokeStyle = color;
+      ctx.setLineDash([5, 5]);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(w, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      
+      ctx.fillStyle = color;
+      ctx.font = '12px "Rubik", sans-serif';
+      ctx.fontWeight = 'bold';
+      ctx.fillText(label, 5, y - 6);
+    };
+    
+    if (entry) drawLine(getY(entry), '#2563eb', 'نقطه ورود');
+    if (stopLoss) drawLine(getY(stopLoss), '#b91c1c', 'حد ضرر');
+    if (target1) drawLine(getY(target1), '#15803d', 'تارگت ۱');
+    if (target2) drawLine(getY(target2), '#15803d', 'تارگت ۲');
+    
+    if (fibLevels && fibLevels.length > 0) {
+       fibLevels.forEach(fib => {
+         if (fib.price && fib.level) {
+           drawLine(getY(fib.price), '#a16207', `Fibo ${fib.level}`);
+         }
+       });
+    }
+  }, [klines, entry, target1, target2, stopLoss, fibLevels]);
+  
+  if (!klines || klines.length === 0) return null;
+  return (
+    <div style={{ marginTop: 18, marginBottom: 18, border: '1px solid #e5e7eb', borderRadius: 14, background: '#f8fafc', padding: '12px 0' }}>
+       <div style={{ padding: '0 16px', fontSize: 13, fontWeight: 700, color: C.muted, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+         <TrendingUp size={14} />
+         چارت تحلیلی با نواحی مهم
+       </div>
+       <canvas 
+         ref={canvasRef} 
+         width={800} 
+         height={320} 
+         style={{ width: '100%', height: 220, display: 'block', direction: 'ltr' }} 
+       />
+    </div>
+  );
+}
+
 function AnalysisCard({ data }) {
   if (data.error) {
     return (
@@ -285,6 +379,19 @@ function AnalysisCard({ data }) {
 
       {/* Card body */}
       <div style={{ padding: "18px 22px" }}>
+        
+        {/* Chart */}
+        {data.klines && (
+          <AIChart 
+            klines={data.klines} 
+            entry={data.entry} 
+            target1={data.target1} 
+            target2={data.target2} 
+            stopLoss={data.stopLoss} 
+            fibLevels={data.fibLevels} 
+          />
+        )}
+
         {/* Confidence */}
         <div style={{ marginBottom: 18 }}>
           <div
@@ -549,11 +656,6 @@ export default function AIAnalysis({ user, onBack }) {
   // Auto signals
   const [autoSignals, setAutoSignals] = useState([]);
 
-  // Custom analysis
-  const [customSymbol, setCustomSymbol] = useState("");
-  const [showSymbolDropdown, setShowSymbolDropdown] = useState(false);
-  const [customTimeframe, setCustomTimeframe] = useState("1h");
-  const [customResult, setCustomResult] = useState(null);
 
   const handleAutoSignals = async () => {
     // درخواست دسترسی اعلان در تعامل کلیک کاربر
@@ -567,12 +669,42 @@ export default function AIAnalysis({ user, onBack }) {
       setError(rateCheck.message);
       return;
     }
+    
     setLoading(true);
     setError("");
     setAutoSignals([]);
+    
     try {
-      const results = await fetchAutoSignals();
-      setAutoSignals(results);
+      const candidates = await fetchTrueTradeTopCandidates();
+      const top3 = candidates.slice(0, 3);
+      
+      for (let i = 0; i < top3.length; i++) {
+        const c = top3[i];
+        try {
+          const analysis = await analyzeSymbol(c.symbol, "1h", false);
+          setAutoSignals(prev => [...prev, {
+            symbol: c.symbol,
+            price: c.price,
+            priceChange: c.priceChange,
+            volume: c.volume,
+            ...analysis,
+            error: null,
+          }]);
+        } catch (err) {
+          setAutoSignals(prev => [...prev, {
+            symbol: c.symbol,
+            price: c.price,
+            priceChange: c.priceChange,
+            volume: c.volume,
+            error: err.message,
+          }]);
+        }
+        
+        // Wait between requests if not the last one
+        if (i < top3.length - 1) {
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+      }
 
       // پخش صدا و ارسال نوتیفیکیشن به ویندوز
       playSuccessSound();
@@ -586,6 +718,13 @@ export default function AIAnalysis({ user, onBack }) {
       setLoading(false);
     }
   };
+
+  // Custom analysis
+  const [customSymbol, setCustomSymbol] = useState("");
+  const [showSymbolDropdown, setShowSymbolDropdown] = useState(false);
+  const [customTimeframe, setCustomTimeframe] = useState("1h");
+  const [useFibonacci, setUseFibonacci] = useState(false);
+  const [customResult, setCustomResult] = useState(null);
 
   const handleCustomAnalysis = async () => {
     const raw = customSymbol.trim();
@@ -611,7 +750,7 @@ export default function AIAnalysis({ user, onBack }) {
     const sym = raw.toUpperCase();
     const finalSymbol = sym.includes("USDT") ? sym : sym + "USDT";
     try {
-      const analysis = await analyzeSymbol(finalSymbol, customTimeframe);
+      const analysis = await analyzeSymbol(finalSymbol, customTimeframe, useFibonacci);
       setCustomResult({ symbol: finalSymbol, ...analysis });
 
       // پخش صدا و ارسال نوتیفیکیشن به ویندوز
@@ -1157,6 +1296,20 @@ export default function AIAnalysis({ user, onBack }) {
                   </>
                 )}
               </button>
+            </div>
+
+            {/* Fibonacci Checkbox */}
+            <div style={{ marginBottom: 26, display: 'flex', alignItems: 'center', gap: 8 }}>
+               <input 
+                 type="checkbox" 
+                 id="fibCheckbox" 
+                 checked={useFibonacci}
+                 onChange={(e) => setUseFibonacci(e.target.checked)}
+                 style={{ width: 18, height: 18, accentColor: '#5b8def', cursor: 'pointer' }}
+               />
+               <label htmlFor="fibCheckbox" style={{ fontSize: 14, color: C.text, cursor: 'pointer', fontWeight: 600 }}>
+                 اعمال رسم سطوح فیبوناچی (Fibonacci) در چارت تحلیلی
+               </label>
             </div>
 
             {loading && !customResult && (
