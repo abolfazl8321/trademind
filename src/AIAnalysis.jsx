@@ -860,7 +860,7 @@ export default function AIAnalysis({ user, onBack }) {
               >
                 هوش مصنوعی ۳ ارز با بیشترین پتانسیل رو از بین ارزهای بازار پیدا
                 می‌کنه و تحلیل تکنیکال حرفه‌ای ارائه میده. داده‌ها مستقیم از
-                صرافی Binance دریافت و توسط Gemini AI تحلیل می‌شن.
+                صرافی THE TRUE TRADE دریافت و توسط Gemini AI تحلیل می‌شن.
               </p>
             </div>
 
@@ -1186,7 +1186,7 @@ export default function AIAnalysis({ user, onBack }) {
                 <div
                   style={{ fontSize: 12, color: C.faint, marginTop: 6 }}
                 >
-                  داده‌ها از CoinEx دریافت و توسط Gemini AI تحلیل می‌شن
+                  داده‌ها از THE TRUE TRADE دریافت و توسط Gemini AI تحلیل می‌شن
                 </div>
               </div>
             )}

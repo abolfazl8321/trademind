@@ -1,13 +1,11 @@
 /* ---------------------------------------------------------------
-   AI Service — CoinEx Market Data + Google Gemini Analysis
+   AI Service — THE TRUE TRADE Market Data + Google Gemini Analysis
    ---------------------------------------------------------------
-   ✅ داده کندل: /api/kline  ← Python Proxy ← CoinEx V2 (CORS-free)
-   ✅ تحلیل AI: Google Gemini 3.6 Flash (با فال‌بک به 2.5 Flash)
+   ✅ داده کندل: /api/kline  ← Vercel Proxy (CORS-free)
+   ✅ تحلیل AI: Google Gemini 3.6 Flash (با فال‌بک به 2.5 Flash) از طریق Vercel
    ✅ مدیریت توکن: Rate Limiter سمت کلاینت + مدیریت 429
    ✅ پاکسازی JSON: حذف کاراکترهای نامعتبر + Retry خودکار
 --------------------------------------------------------------- */
-
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || "";
 
 /* ------------------------------------------------------------------
    مدل‌های Gemini — اصلی + فال‌بک
@@ -20,36 +18,23 @@ const GEMINI_MODELS = [
 
 /* ------------------------------------------------------------------
    ⚡ Rate Limiter — مدیریت تعداد درخواست‌ها در دقیقه
-   نسخه رایگان Gemini API:
-     - gemini-3.6-flash: حدود 10 RPM (درخواست در دقیقه)
-     - gemini-2.5-flash: حدود 15 RPM
-     - محدودیت روزانه: 1500 درخواست در روز
-     - محدودیت توکن: حدود 1,000,000 TPM (توکن در دقیقه)
-   
-   ما سمت کلاینت محدودیت 8 RPM اعمال می‌کنیم تا هرگز به 429 نخوریم
 ------------------------------------------------------------------ */
 const RATE_LIMIT = {
   maxRequestsPerMinute: 8,
   requestTimestamps: [],
   dailyCount: 0,
   dailyResetTime: 0,
-  maxDailyRequests: 1400, // کمتر از 1500 واقعی برای ایمنی
+  maxDailyRequests: 1400, 
 };
 
-/**
- * بررسی اینکه آیا می‌توانیم درخواست بزنیم یا نه
- * @returns {{ allowed: boolean, waitSeconds: number, message: string }}
- */
 export function checkRateLimit() {
   const now = Date.now();
 
-  // ریست شمارنده روزانه (هر 24 ساعت)
   if (now - RATE_LIMIT.dailyResetTime > 24 * 60 * 60 * 1000) {
     RATE_LIMIT.dailyCount = 0;
     RATE_LIMIT.dailyResetTime = now;
   }
 
-  // بررسی محدودیت روزانه
   if (RATE_LIMIT.dailyCount >= RATE_LIMIT.maxDailyRequests) {
     const resetIn = Math.ceil((RATE_LIMIT.dailyResetTime + 24 * 60 * 60 * 1000 - now) / 1000 / 60 / 60);
     return {
@@ -59,12 +44,10 @@ export function checkRateLimit() {
     };
   }
 
-  // پاکسازی درخواست‌های قدیمی‌تر از 1 دقیقه
   RATE_LIMIT.requestTimestamps = RATE_LIMIT.requestTimestamps.filter(
     (ts) => now - ts < 60_000
   );
 
-  // بررسی محدودیت دقیقه‌ای
   if (RATE_LIMIT.requestTimestamps.length >= RATE_LIMIT.maxRequestsPerMinute) {
     const oldestRequest = RATE_LIMIT.requestTimestamps[0];
     const waitMs = 60_000 - (now - oldestRequest);
@@ -85,15 +68,13 @@ export function checkRateLimit() {
   };
 }
 
-/** ثبت درخواست جدید در Rate Limiter */
 function recordRequest() {
   RATE_LIMIT.requestTimestamps.push(Date.now());
   RATE_LIMIT.dailyCount++;
 }
 
 /* ------------------------------------------------------------------
-   نگاشت Timeframe: فرمت UI → فرمت CoinEx API
-   CoinEx periods: 1min,3min,5min,15min,30min,1hour,2hour,4hour,6hour,12hour,1day,3day,1week
+   نگاشت Timeframe
 ------------------------------------------------------------------ */
 const PERIOD_MAP = {
   "1m": "1min",
@@ -124,50 +105,26 @@ export const TIMEFRAME_OPTIONS = [
 export const TOP_SYMBOLS = [
   "BTC", "ETH", "BNB", "SOL", "XRP", "DOGE", "ADA", "AVAX", "LINK", "NEAR",
   "DOT", "MATIC", "TRX", "LTC", "BCH", "SHIB", "UNI", "ATOM", "ETC", "XLM",
-  "ICP", "VET", "FIL", "RNDR", "AR", "OP", "ARB", "AAVE", "SUI", "APT",
-  "INJ", "GRT", "SNX", "MKR", "QNT", "ALGO", "STX", "EGLD", "SAND", "MANA",
-  "THETA", "AXS", "FTM", "EOS", "XTZ", "KAVA", "FLOW", "NEO", "CHZ", "CRV",
-  "ENJ", "GALA", "LDO", "RUNE", "ZIL", "BAT", "COMP", "DASH", "ZEC", "XMR",
-  "1INCH", "SUSHI", "YFI", "CAKE", "WAVES", "KSM", "MINA", "DYDX", "GMX", "CFX",
-  "PEPE", "FLOKI", "BONK", "WIF", "ORDI", "SATS", "BOME", "FET", "AGIX", "OCEAN",
-  "RPL", "LRC", "BAL", "BAND", "CVC", "STORJ", "SC", "DGB", "RVN", "ONE",
-  "CELO", "GLMR", "MOVR", "KDA", "CKB", "IOTX", "WAXP", "SYS", "HIVE", "STEEM",
-  "LSK", "NANO", "ICX", "ONT", "QTUM", "OMG", "ZRX", "REP", "NMR", "RLC",
-  "OXT", "LPT", "AUDIO", "SKL", "CTSI", "TRU", "LIT", "SFP", "TWT", "C98",
-  "BICO", "API3", "UMA", "RAD", "ENS", "GAL", "GMT", "APE", "LUNA", "LUNC",
-  "ROSE", "SCRT", "XEC", "BTT", "WIN", "HOT", "DENT", "VTHO", "IOST", "MBL",
-  "STPT", "TROY", "COS", "ARPA", "NKN", "DUSK", "ANKR", "MTL", "BLZ", "TOMO"
+  "ICP", "VET", "FIL", "RNDR", "AR", "OP", "ARB", "AAVE", "SUI", "APT"
 ];
 
-
-/* ------------------------------------------------------------------
-   تعداد کندل بر اساس تایم‌فریم
-   - کمتر از ۳۰ دقیقه: ۱۰۰ کندل (نویز بیشتر، نیاز به داده بیشتر)
-   - ۳۰ دقیقه و بالاتر: ۷۰ کندل (کافی برای تحلیل)
------------------------------------------------------------------- */
 function fetchLimitFor(interval) {
   const shortTFs = ["1m", "3m", "5m", "15m"];
   return shortTFs.includes(interval) ? 100 : 70;
 }
 
-/* ------------------------------------------------------------------
-   تعداد کندل ارسالی به Gemini (برای صرفه‌جویی توکن)
-   - تایم‌فریم کوتاه: ۴۰ کندل (کاهش توکن مصرفی)
-   - تایم‌فریم بلند: ۵۰ کندل
------------------------------------------------------------------- */
 function promptSliceFor(interval) {
   const shortTFs = ["1m", "3m", "5m", "15m"];
   return shortTFs.includes(interval) ? 40 : 70;
 }
 
 /* ------------------------------------------------------------------
-   دریافت کندل از CoinEx (از طریق Python Proxy — بدون CORS)
+   دریافت کندل تاریخی (پروکسی Vercel)
 ------------------------------------------------------------------ */
-export async function fetchCoinExKlines(symbol, interval = "1h", limit = 70) {
+export async function fetchHistoricalKlines(symbol, interval = "1h", limit = 70) {
   const period = PERIOD_MAP[interval] || "1hour";
   const market = symbol.toUpperCase().replace("/", "");
 
-  // URL نسبی: Vite در dev به localhost:8000 پروکسی می‌کنه
   const url = new URL("/api/kline", window.location.origin);
   url.searchParams.set("market", market);
   url.searchParams.set("period", period);
@@ -175,13 +132,13 @@ export async function fetchCoinExKlines(symbol, interval = "1h", limit = 70) {
 
   const res = await fetch(url.toString());
   if (!res.ok) {
-    throw new Error(`خطا در دریافت داده CoinEx: ${res.status}`);
+    throw new Error(`خطا در دریافت داده مارکت: ${res.status}`);
   }
 
   const json = await res.json();
 
   if (json.code !== 0) {
-    throw new Error(`CoinEx API Error: ${json.message || "خطای ناشناخته"}`);
+    throw new Error(`THE TRUE TRADE API Error: ${json.message || "خطای ناشناخته"}`);
   }
 
   const candles = json.data || [];
@@ -200,27 +157,27 @@ export async function fetchCoinExKlines(symbol, interval = "1h", limit = 70) {
 }
 
 /* ------------------------------------------------------------------
-   دریافت برترین ارزها از CoinEx (از طریق Python Proxy)
+   دریافت برترین ارزها (THE TRUE TRADE)
 ------------------------------------------------------------------ */
-export async function fetchCoinExTopCandidates() {
+export async function fetchTrueTradeTopCandidates() {
   const res = await fetch("/api/ticker");
-  if (!res.ok) throw new Error("خطا در دریافت لیست ارزها از CoinEx");
+  if (!res.ok) throw new Error("خطا در دریافت لیست ارزها از THE TRUE TRADE");
 
   const json = await res.json();
-  if (json.code !== 0) throw new Error("خطا در پاسخ CoinEx Ticker");
+  if (json.code !== 0) throw new Error("خطا در پاسخ Ticker");
 
   return (json.data || [])
     .filter((t) => {
       const sym = t.market || "";
       if (!sym.endsWith("USDT")) return false;
       const base = sym.replace("USDT", "");
-      if (!TOP_SYMBOLS.includes(base)) return false; // فقط از بین ۱۵۰ ارز برتر
+      if (!TOP_SYMBOLS.includes(base)) return false; 
       return true;
     })
     .map((t) => ({
       symbol: t.market,
       price: parseFloat(t.last || 0),
-      priceChange: parseFloat(t.change_rate || 0) * 100, // نسبت → درصد
+      priceChange: parseFloat(t.change_rate || 0) * 100, 
       volume: parseFloat(t.volume || 0),
     }))
     .filter((t) => t.volume > 500_000 && t.price > 0)
@@ -229,7 +186,7 @@ export async function fetchCoinExTopCandidates() {
       const scoreB = Math.abs(b.priceChange) * Math.log10(Math.max(b.volume, 1));
       return scoreB - scoreA;
     })
-    .slice(0, 15);
+    .slice(0, 30);
 }
 
 /* ------------------------------------------------------------------
@@ -263,22 +220,17 @@ All number fields MUST be numeric values (not strings). The "analysis" field mus
 
 /* ------------------------------------------------------------------
    پاکسازی و پارس JSON از پاسخ هوش مصنوعی
-   - حذف کاراکترهای نامعتبر (newline, tab)
-   - حذف Markdown code fences
-   - حذف trailing commas
 ------------------------------------------------------------------ */
 function parseAIResponse(rawText) {
   if (!rawText || typeof rawText !== "string") {
     throw new Error("پاسخی از هوش مصنوعی دریافت نشد");
   }
 
-  // مرحله ۱: حذف markdown code fences
   let cleaned = rawText
     .replace(/```json\s*/gi, "")
     .replace(/```\s*/g, "")
     .trim();
 
-  // مرحله ۲: استخراج آبجکت JSON
   const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
     console.error("Gemini Raw Response (No JSON found):", rawText);
@@ -287,20 +239,18 @@ function parseAIResponse(rawText) {
 
   let jsonText = jsonMatch[0];
 
-  // مرحله ۳: پاکسازی کاراکترهای مخرب
   jsonText = jsonText
-    .replace(/[\n\r\t]/g, " ")      // حذف اینترها و تب‌ها
-    .replace(/\s+/g, " ")           // فشرده‌سازی فضاهای خالی
-    .replace(/,\s*}/g, "}")         // حذف کامای اضافه در انتهای آبجکت
-    .replace(/,\s*]/g, "]")         // حذف کامای اضافه در انتهای آرایه
-    .replace(/:\s*NaN\b/gi, ": 0")  // تبدیل NaN به 0
-    .replace(/:\s*undefined\b/gi, ": 0")  // تبدیل undefined به 0
-    .replace(/:\s*null\b/gi, ": 0");      // تبدیل null به 0
+    .replace(/[\n\r\t]/g, " ")      
+    .replace(/\s+/g, " ")           
+    .replace(/,\s*}/g, "}")         
+    .replace(/,\s*]/g, "]")         
+    .replace(/:\s*NaN\b/gi, ": 0")  
+    .replace(/:\s*undefined\b/gi, ": 0")  
+    .replace(/:\s*null\b/gi, ": 0");      
 
   try {
     const parsed = JSON.parse(jsonText);
 
-    // اطمینان از وجود فیلدهای ضروری
     return {
       trend: parsed.trend || "SIDEWAYS",
       signal: parsed.signal || "NEUTRAL",
@@ -320,24 +270,15 @@ function parseAIResponse(rawText) {
 }
 
 /* ------------------------------------------------------------------
-   فراخوانی Gemini API با یک مدل مشخص
+   فراخوانی Gemini API از طریق Vercel Serverless Function
 ------------------------------------------------------------------ */
-async function callGemini(model, prompt) {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.2,
-          maxOutputTokens: 1500,
-          responseMimeType: "application/json",
-        },
-      }),
-    }
-  );
+async function callGeminiViaProxy(model, prompt) {
+  const url = new URL("/api/analyze", window.location.origin);
+  const res = await fetch(url.toString(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, prompt }),
+  });
 
   if (res.status === 429) {
     return { error429: true };
@@ -345,13 +286,13 @@ async function callGemini(model, prompt) {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    return { errorMsg: err?.error?.message || `خطای API (${res.status})` };
+    return { errorMsg: err?.errorMsg || `خطای API (${res.status})` };
   }
 
   const result = await res.json();
   const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+  
   if (!text) {
-    // بررسی safety filter
     const reason = result?.candidates?.[0]?.finishReason;
     if (reason === "SAFETY") {
       return { errorMsg: "هوش مصنوعی به دلیل محدودیت‌های امنیتی گوگل از ارائه تحلیل خودداری کرده — دوباره تلاش کن" };
@@ -363,30 +304,23 @@ async function callGemini(model, prompt) {
 }
 
 /* ------------------------------------------------------------------
-   تحلیل یک ارز با Gemini (با مدیریت کامل خطا و Retry)
+   تحلیل یک ارز با Gemini 
 ------------------------------------------------------------------ */
 export async function analyzeSymbol(symbol, timeframe = "1h") {
-  if (!GEMINI_API_KEY) {
-    throw new Error("کلید API جمینای تنظیم نشده. VITE_GEMINI_API_KEY را در فایل .env بررسی کن.");
-  }
-
-  // ✅ بررسی Rate Limit قبل از ارسال درخواست
   const rateCheck = checkRateLimit();
   if (!rateCheck.allowed) {
     throw new Error(rateCheck.message);
   }
 
   const limit = fetchLimitFor(timeframe);
-  const klines = await fetchCoinExKlines(symbol, timeframe, limit);
+  const klines = await fetchHistoricalKlines(symbol, timeframe, limit);
   const prompt = buildPrompt(symbol, timeframe, klines);
 
-  // ✅ ثبت درخواست در Rate Limiter
   recordRequest();
 
-  // تلاش با هر مدل (اصلی + فال‌بک)
   let lastError = "";
   for (const model of GEMINI_MODELS) {
-    const result = await callGemini(model, prompt);
+    const result = await callGeminiViaProxy(model, prompt);
 
     if (result.error429) {
       throw new Error(
@@ -397,7 +331,7 @@ export async function analyzeSymbol(symbol, timeframe = "1h") {
     if (result.errorMsg) {
       lastError = result.errorMsg;
       console.warn(`Model ${model} failed:`, lastError);
-      continue; // تلاش با مدل بعدی
+      continue;
     }
 
     try {
@@ -405,20 +339,17 @@ export async function analyzeSymbol(symbol, timeframe = "1h") {
     } catch (parseErr) {
       lastError = parseErr.message;
       console.warn(`Model ${model} parse failed:`, lastError);
-      continue; // تلاش با مدل بعدی
+      continue;
     }
   }
 
-  // اگر هیچ مدلی جواب نداد
   throw new Error(lastError || "خطا در ارتباط با سرور هوش مصنوعی — لطفاً دوباره تلاش کن");
 }
 
 /* ------------------------------------------------------------------
-   سیگنال‌های خودکار: ۳ ارز برتر CoinEx تحلیل می‌شوند
-   (ترتیبی برای جلوگیری از Rate Limit)
+   سیگنال‌های خودکار: ۳ ارز برتر THE TRUE TRADE تحلیل می‌شوند
 ------------------------------------------------------------------ */
 export async function fetchAutoSignals() {
-  // ✅ بررسی Rate Limit قبل از شروع — آیا حداقل ۳ درخواست داریم؟
   const rateCheck = checkRateLimit();
   if (!rateCheck.allowed) {
     throw new Error(rateCheck.message);
@@ -429,10 +360,9 @@ export async function fetchAutoSignals() {
     );
   }
 
-  const candidates = await fetchCoinExTopCandidates();
+  const candidates = await fetchTrueTradeTopCandidates();
   const top3 = candidates.slice(0, 3);
 
-  // ترتیبی اجرا می‌کنیم (نه موازی) تا Rate Limit را رعایت کنیم
   const results = [];
   for (const c of top3) {
     try {
@@ -455,7 +385,6 @@ export async function fetchAutoSignals() {
       });
     }
 
-    // تأخیر ۲ ثانیه بین هر درخواست برای جلوگیری از Rate Limit
     if (top3.indexOf(c) < top3.length - 1) {
       await new Promise((r) => setTimeout(r, 2000));
     }
